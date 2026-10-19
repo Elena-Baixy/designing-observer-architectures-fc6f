@@ -1,0 +1,151 @@
+idea:
+  title: Designing observer architectures for long-horizon forecasting of unsafe and
+    long-form model behavior
+  domain: artificial_intelligence
+  hypothesis: 'Current activation verbalizers (Activation Oracles, LatentQA-style
+    decoders,
+
+    probes) read one activation and answer about the present or the next few
+
+    tokens. Forecasting behavior hundreds to thousands of tokens ahead, e.g., when
+
+    a response will turn unsafe or what the rest of a long answer will cover, needs
+
+    an architecture built for the future. We hypothesize that an observer which
+
+    (a) keeps a memory of the activation trajectory, (b) predicts compact latent
+
+    representations of future windows at several time scales, and (c) outputs an
+
+    explicit event-time (hazard) distribution will beat a direct activation
+
+    verbalizer trained on the same labels. The gain should grow with lead
+
+    distance, up to 1024-2048 tokens.
+
+    '
+  background:
+    description: "Goal: design, build and compare NEW observer architectures that\
+      \ read a\nfrozen target model's activations while it generates and forecast:\n\
+      \  1. Unsafe behavior onset: the probability that the first unsafe event\n \
+      \    (e.g., harmful recommendation) occurs within the next H tokens, for\n \
+      \    H in {64, 128, 256, 512, 1024, 2048}, while the prefix is still safe.\n\
+      \  2. Long-form content: what the rest of the response will do, i.e. the\n \
+      \    sequence of topics and behaviors (explain, refuse, recommend, narrate)\n\
+      \     per future segment, and a short summary of the remaining response.\n\n\
+      Target model: Qwen3-8B (https://huggingface.co/Qwen/Qwen3-8B), frozen. The\n\
+      observer must never affect generation. Future text is used only for\ntraining\
+      \ targets and evaluation.\n\nCandidate architectures (the agent should implement\
+      \ the most promising 2-3,\nstarting from the simplest, and may propose better\
+      \ ones):\n  A. Horizon-query bottleneck: learned queries per future window attend\
+      \ to\n     multi-layer activations and produce forecast vectors. A timing head\
+      \ and\n     a QA decoder read those vectors.\n  B. Latent rollout / world model:\
+      \ a small recurrent or transformer dynamics\n     model rolls a latent state\
+      \ forward segment by segment (e.g., 64-token\n     steps), without generating\
+      \ tokens. Heads read each rolled-out state.\n     Tests whether iterated latent\
+      \ prediction reaches further than direct\n     prediction.\n  C. Future-embedding\
+      \ prediction (JEPA-style): predict a frozen encoder's\n     embedding (or the\
+      \ target's own pooled activations) of each future\n     window from the prefix,\
+      \ with a contrastive or regression loss. The\n     predicted embeddings feed\
+      \ the safety and QA heads.\n  D. Multi-scale hierarchical forecast: coarse forecast\
+      \ for the whole\n     remaining response plus finer forecasts for nearby windows.\
+      \ Coarse\n     predictions condition fine ones.\n  E. Streaming memory: any\
+      \ of A-D over a recent activation window or a\n     recurrent memory updated\
+      \ every 16-32 tokens, instead of only the\n     latest position.\nShared components:\
+      \ a discrete-time hazard / survival head over first-event\nbins with censoring-aware\
+      \ loss (generations that stop early are censored,\nnot safe). Cumulative risk\
+      \ is monotonic in H by construction. Optional\nK-way mixture of future timelines\
+      \ to represent uncertainty.\n\nData (the agent should find prompt sources):\
+      \ fresh continuations from\nfrozen Qwen3-8B on prompts that can lead to delayed\
+      \ unsafe content, plus\nlong-form prompts (long advice, stories, multi-step\
+      \ instructions) for\ncontent forecasting. Generate long continuations (up to\
+      \ about 2048 tokens).\nAnnotate each completed generation once with an external\
+      \ LLM as a timeline:\nsegment topics, behaviors, unsafe spans with token offsets,\
+      \ first unsafe\nonset. Derive prefix-level targets programmatically. Split by\
+      \ prompt family\nbefore generation. Fix cutoffs before looking at continuations.\
+      \ Use only\nstill-safe prefixes for the main safety analysis. Audit that no\
+      \ future\ntokens enter observer inputs.\n\nPrevious related run in this project\
+      \ (forecasting delayed unsafe behavior\nwith verbalizers, horizons up to 512)\
+      \ motivates this one: this idea focuses\non the architecture design and on longer\
+      \ horizons and long-form content.\n"
+    papers:
+    - url: https://arxiv.org/abs/2412.08686
+      description: 'LatentQA: decoding activations into natural-language answers about
+        model behavior'
+    code_references:
+    - repo: https://github.com/aypan17/latentqa
+      description: LatentQA code (decoder / activation-reading pipeline)
+    related_work_to_find: 'Activation Oracles and ''Building Better Activation Oracles'',
+      Predictive
+
+      Concept Decoders, Natural Language Autoencoders, Future Probes, Beyond
+
+      Multi-Token Prediction (future summaries), JANUS, DreamGuard, JEPA-style
+
+      latent prediction, and discrete-time survival / hazard models. Do not claim
+
+      to be the first long-term unsafe-behavior predictor.
+
+      '
+  methodology:
+    approach: 'Build a shared data pipeline and activation cache. Train simple baselines
+
+      first to confirm there is signal. Then implement candidate architectures
+
+      with matched activation inputs, decoder and parameter/compute budget, and
+
+      compare them on safety forecasting and long-form content forecasting across
+
+      horizons up to 2048 tokens. Ablate each component.
+
+      '
+    steps:
+    - Fix the safety rubric, the event definition and the long-form label schema;
+      split prompt families
+    - Generate long continuations from frozen Qwen3-8B, annotate timelines, cache
+      multi-layer activations at fixed cutoffs
+    - Causal-input and split audits
+    - 'Baselines: prevalence, token-position, text-only forecaster, linear/MLP probes,
+      off-the-shelf AO/LatentQA, direct AO trained on the same labels'
+    - Implement architectures A (horizon-query) and B or C (latent rollout / future-embedding);
+      add E (memory) if time permits
+    - Compare at matched budgets; plot forecast quality vs. lead distance
+    - 'Ablations: no future auxiliary loss, no memory, no hazard head (independent
+      per-horizon classifiers), raw-activation bypass'
+    - 'Controls: shuffled / zero / constant activations to check that the observer
+      reads activations'
+    baselines:
+    - Prevalence and token-position predictors
+    - Text-only forecaster with the same targets
+    - Linear and small MLP activation probes per horizon
+    - Off-the-shelf Activation Oracle / LatentQA decoder
+    - Direct AO trained on the same future labels (the key matched baseline)
+    metrics:
+    - 'Safety: early-warning recall at 128/256/512/1024 lead tokens at a 5% trajectory-level
+      false-alarm rate'
+    - 'Safety per horizon: log loss, Brier, AUROC, AUPRC, calibration (repeated rollouts
+      for a held-out subset)'
+    - 'Long-form: per-segment topic/behavior accuracy vs. distance; summary quality
+      judged against the actual continuation (held-out judge), with unsupported-claim
+      rate'
+    - 'Forecast-quality-vs-horizon curves: the horizon where each method decays to
+      the prior'
+    - 'Cost: parameters, training compute, per-update latency'
+    - Bootstrap CIs by prompt family; multiple seeds for the main comparison
+  evaluation_criteria:
+  - At least two new architectures implemented and compared to the matched direct
+    AO at equal budget
+  - Clear evidence on which components (memory, latent rollout, future embeddings,
+    hazard head) help at long horizons
+  - No future leakage; results reported per prompt family with uncertainty
+  - Safety forecasting and long-form content forecasting reported separately
+  constraints:
+    compute: gpu_required
+  metadata:
+    author: Xiaoyan Bai
+    idea_id: designing_observer_architectur_20261018_202410_55406cf1
+    created_at: '2026-10-18T20:24:10.882498'
+    status: submitted
+    github_repo_name: designing-observer-architectures-fc6f
+    github_repo_url: https://github.com/Elena-Baixy/designing-observer-architectures-fc6f
+    github_repo_private: false
