@@ -1,0 +1,9 @@
+PDF: papers/1807.03748_contrastive_predictive_coding.pdf
+Total pages: 13
+Pages per chunk: 4
+
+Chunks:
+  1807.03748_contrastive_predictive_coding_chunk_001.pdf: pages 1-4
+  1807.03748_contrastive_predictive_coding_chunk_002.pdf: pages 5-8
+  1807.03748_contrastive_predictive_coding_chunk_003.pdf: pages 9-12
+  1807.03748_contrastive_predictive_coding_chunk_004.pdf: page 13

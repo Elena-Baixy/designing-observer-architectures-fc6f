@@ -1,0 +1,116 @@
+\section{Results}
+\label{sec:results}
+
+\subsection{Natural onsets are rare and early}
+\label{sec:data}
+
+\input{tables/data}
+
+\Tabref{tab:data} summarizes the data.
+Only 5 of 84 continuations contain a segment flagged unsafe, and every unsafe onset is at or before token 448.
+Caution events are more frequent (42 trajectories), but most are refusals at token 0; only seven have a late onset (256, 384, 512, 768, 1152, 1152 and 1408 tokens).
+Segment behaviors are dominated by explain (614 segments), narrate (234) and recommend (133); refuse (27) and warn (23) are rare.
+Because 86\% of responses end with \eos and are censored, the number of known-status still-safe test prefixes falls quickly with horizon: 306, 282, 239, 175, 89 and 13 for $H = 64,\dots,2048$ on the unsafe event.
+We therefore treat $H=2048$ as uninformative throughout.
+
+\subsection{Unsafe-onset forecasting is unpowered}
+\label{sec:unsafe}
+
+\input{tables/unsafe}
+
+\Tabref{tab:unsafe} reports AUROC for the primary event.
+The text-only TF-IDF baseline is best at every horizon (0.732--0.929 for $H \le 1024$), and the linear probe and \directao follow.
+None of the memory-based observers improves on \directao, and every family-bootstrap 95\% CI for the difference includes zero.
+Early-warning recall at a 5\% trajectory false-alarm rate is 0 for every method, since only one test trajectory has an onset at or after 128 tokens.
+With 2 test event trajectories (onsets at 64 and 448 tokens), {\bf we draw no architectural conclusion from this event}.
+
+\subsection{Caution-onset forecasting}
+\label{sec:caution}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{figures/safety_auroc_vs_H_caution.png}
+\caption{Caution-onset forecasting. \figleft AUROC vs.\ horizon for baselines (dashed) and observers (solid; error bars are seed sd). \figright $\Delta$AUROC vs.\ \directao, including ablations. The memory-based observers lead at every $H \le 1024$, but the gap peaks at $H = 128$--$256$ and shrinks by $H = 1024$; removing memory from \roll turns its gain negative at long horizons. All models reach 1.0 at $H = 2048$, where nearly all known-status prefixes are positive.}
+\label{fig:caution}
+\end{figure}
+
+\input{tables/caution}
+
+{\bf Do memory-based observers beat the direct readout?}
+On the denser caution event, yes in sign, but not significantly (\tabref{tab:caution}, \figref{fig:caution}).
+\hier reaches AUROC 0.976--0.990 at $H \le 1024$, compared with 0.871--0.953 for \directao, a difference of $+0.04$ to $+0.11$.
+Its largest gains are at $H=256$ ($+0.11$, CI [0.00, 0.16]) and $H=512$ ($+0.09$, CI [0.00, 0.14], $p=0.09$).
+\hq gains $+0.03$ to $+0.09$.
+The gains are consistent across seeds, but every CI touches or includes zero, because only three test trajectories from two families have a late caution onset.
+A plain linear probe on the latest activation is nearly as strong (0.870--0.977), which shows that most of the signal is already present in the current state.
+
+{\bf Does the gain grow with lead distance?}
+No.
+The gap over \directao peaks at $H = 256$--$512$ and shrinks to $+0.03$ at $H=1024$ (\figref{fig:caution}, right).
+Part of this shrinkage is a ceiling: \directao itself reaches 0.953 at $H=1024$.
+\hier has the flattest curve of all models.
+
+{\bf Which components matter?}
+\emph{Memory} gives the clearest long-horizon benefit.
+Removing it from \roll lowers AUROC from 0.921 to 0.829 at $H=512$ and from 0.944 to 0.831 at $H=1024$ ($\Delta$ vs.\ \directao $=-0.11$, $p=0.06$).
+Removing it from \hq lowers AUROC at $H=1024$ from 0.996 to 0.946.
+At short horizons memory does not help: \hq without memory is the best model at $H=64$ (0.981).
+\emph{The JEPA auxiliary} changes AUROC by about 0.01 at every horizon.
+\emph{The hazard head} gives no AUROC gain over independent per-$H$ classifiers (\hq $-$ hazard head is within 0.016 of \hq everywhere).
+\emph{Latent rollout} does not reach further than direct query-based prediction: \roll is the weakest memory-based observer at $H \ge 256$.
+
+{\bf Calibration.}
+At $H \le 512$ all activation models have similar Brier scores (0.015--0.09, vs.\ 0.03--0.12 for prevalence).
+At $H = 1024$, \directao scores 0.082 and \hq without the hazard head 0.065, while the hazard models score 0.08--0.11 and \roll without memory 0.16.
+At $H=2048$ the hazard models with memory degrade to 0.24--0.30, compared with 0.02--0.03 for independent per-$H$ classifiers.
+They under-predict because \eqref{eq:hazard} must extrapolate the hazard over late bins that are rarely observed in training.
+
+{\bf Early warning.}
+Only 3 test trajectories have a caution onset at or after 128 tokens.
+Recall at a 5\% trajectory false-alarm rate is 0/3 for all observers except \hq without JEPA (1/3), and 2/3 for TF-IDF; these counts are too small to compare methods.
+
+\subsection{Pooled AUROC largely reflects prompt type}
+\label{sec:per_source}
+
+{\bf Is the caution gain a timing forecast?}
+Mostly not.
+At $H \ge 512$, all positive test prefixes for the caution event come from \aegis and \xstest prompts, while \longwriter prefixes, the majority, are all negative.
+A model that separates harmful-looking prompts from long-form tasks therefore scores high without forecasting timing.
+Within a single source the evidence is thin (\tabref{tab:per_source} in \appref{app:per_source}).
+On the 9 \xstest prefixes at $H=512$, AUROC is 1.00 for \hier, 0.50 for \roll, 0.38 for \directao and 0.00 for \hq.
+On the unsafe event, within \aegis (14 prefixes, 8 positive), \hier and \hq without JEPA reach 0.94 vs.\ 0.85 for \directao, while within \longwriter (2 positives) every model is at or below chance (0.11--0.55).
+We therefore read pooled differences as ``which observer better encodes prompt-type risk'' rather than as evidence of long-range timing forecasts.
+
+\subsection{Long-form content forecasting}
+\label{sec:content}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{figures/content_vs_distance_unsafe.png}
+\caption{Content forecasting vs.\ distance ahead. \figleft Future-segment behavior accuracy: all observers stay at 0.83--0.89 up to 1024 tokens ahead, above the majority baseline (about 0.62) and slightly above copy-last-segment, which uses annotator labels. \figright Topic-cluster accuracy: \directao and copy-last are strongest; the query-based observers \hq and \hier are weakest and decline with distance.}
+\label{fig:content}
+\end{figure}
+
+\input{tables/content}
+
+{\bf Can observers forecast what a long response will do?}
+Yes, for behavior and summaries (\tabref{tab:content}, \figref{fig:content}).
+All activation observers forecast future-segment behavior at 0.83--0.88 accuracy up to 1024 tokens ahead, far above the majority baseline (0.61--0.64) and slightly above copy-last (0.82--0.84).
+Summary retrieval reaches MRR 0.074--0.101, compared with 0.019 for the no-activation baselines, a 4--5$\times$ improvement.
+\hq and \hier beat \directao on summary retrieval (MRR 0.095 and 0.099 vs.\ 0.087; top-10 0.235 and 0.239 vs.\ 0.200) and on behavior at 256--512 tokens ahead (0.873--0.881 vs.\ 0.844--0.856).
+\directao is best on topic-cluster accuracy at $k \ge 4$, where \hq falls to 0.088 at $k=16$.
+Here memory is not needed: \hq without memory has the best MRR (0.101).
+
+{\bf Do observers actually read activations?}
+Yes.
+Zeroing activations at test time drops behavior accuracy at $k=4$ to the majority value (0.638) or below (0.06 for \directao), and summary MRR to chance (0.019).
+Shuffling activations across trajectories gives behavior accuracy 0.46--0.52 and MRR 0.024--0.031.
+One caveat: for memory models with zeroed inputs, the padding mask still reveals the cutoff position, which explains above-chance zero-control safety AUROC for some memory models.
+
+\subsection{Cost}
+\label{sec:cost}
+
+\input{tables/cost}
+
+All observers are cheap (\tabref{tab:cost}).
+Memory-based observers cost 2.3--3.8\,ms per 16-token update, compared with 0.9\,ms for \directao, and train in 3--4\,s per seed on our data.

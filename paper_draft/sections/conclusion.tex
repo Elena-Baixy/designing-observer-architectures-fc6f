@@ -1,0 +1,10 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+We asked whether observers with trajectory memory, future-window queries, a future-activation loss and a censoring-aware hazard head forecast unsafe and long-form behavior of a frozen \qwen further ahead than a matched direct readout.
+In a pilot of 84 on-policy trajectories, the hierarchical and horizon-query observers rank caution onsets and retrieve remaining-response summaries somewhat better than the direct readout, but the differences are not significant, do not grow with lead distance, and largely reflect prompt-type separation.
+Memory is the one component with a consistent long-horizon benefit; the hazard head, JEPA loss and latent rollout did not earn their complexity.
+Long-horizon \emph{unsafe} forecasting could not be tested, because unmodified prompts produce almost no late unsafe content.
+
+The key takeaway is that a fair test of long-horizon activation forecasting needs data with late natural events and within-source evaluation, not just better architectures.
+Next steps are to scale data 10--20$\times$ with repeated rollouts per prompt, to seek natural late-onset regimes such as multi-turn agent transcripts or the transition from a reasoning trace to the final answer, to cross-check labels with a token-level guard model~\citep{qwen2025guard}, to add trained Activation Oracle and LatentQA decoder baselines, and to fix the hazard head's long-horizon calibration.

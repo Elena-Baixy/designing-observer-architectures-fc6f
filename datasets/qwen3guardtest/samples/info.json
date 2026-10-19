@@ -1,0 +1,41 @@
+{
+ "thinking": {
+  "rows": 1059,
+  "columns": [
+   "unique_id",
+   "message",
+   "unsafe_type",
+   "source",
+   "label",
+   "input_ids",
+   "unsafe_end_index",
+   "unsafe_start_index"
+  ]
+ },
+ "response_loc": {
+  "rows": 813,
+  "columns": [
+   "unique_id",
+   "message",
+   "unsafe_type",
+   "source",
+   "label",
+   "input_ids",
+   "unsafe_end_index",
+   "unsafe_start_index"
+  ]
+ },
+ "thinking_loc": {
+  "rows": 569,
+  "columns": [
+   "unique_id",
+   "message",
+   "unsafe_type",
+   "source",
+   "label",
+   "input_ids",
+   "unsafe_end_index",
+   "unsafe_start_index"
+  ]
+ }
+}

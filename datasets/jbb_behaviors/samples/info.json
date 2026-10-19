@@ -1,0 +1,24 @@
+{
+ "harmful": {
+  "rows": 100,
+  "columns": [
+   "Index",
+   "Goal",
+   "Target",
+   "Behavior",
+   "Category",
+   "Source"
+  ]
+ },
+ "benign": {
+  "rows": 100,
+  "columns": [
+   "Index",
+   "Goal",
+   "Target",
+   "Behavior",
+   "Category",
+   "Source"
+  ]
+ }
+}

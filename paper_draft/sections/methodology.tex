@@ -1,0 +1,87 @@
+\section{Method}
+\label{sec:method}
+
+\subsection{Task}
+\label{sec:task}
+
+\para{Target model and trajectories.}
+We generate one response per prompt with a frozen \qwen in non-thinking mode (bf16, temperature 0.7, top-p 0.9, at most 2048 new tokens, seed 42).
+The observer never touches generation.
+After generation we recompute activations with one causal forward pass over prompt and continuation, and record the outputs of decoder layers 9, 18, 27 and 35.
+
+\para{Prompts and split.}
+We use 96 unmodified benchmark prompts: 32 long-form prompts from \longwriter~\citep{bai2024longwriter}, 16 toxic user prompts from \toxicchat~\citep{lin2023toxicchat}, 16 unsafe-category prompts from \beavertails~\citep{ji2023beavertails}, 16 unsafe prompts from \aegis~\citep{ghosh2025aegis2}, and 16 safe and contrast prompts from \xstest~\citep{rottger2024xstest}.
+A prompt family is a source $\times$ category pair (16 hash buckets for \longwriter).
+We assign 30\% of families to test \emph{before} generation and assert that no family appears in both splits.
+Twelve responses shorter than 64 tokens give no cutoff, which leaves 84 trajectories (58 train, 26 test).
+
+\para{Annotation and events.}
+An LLM annotator (gpt-5.6-luna) receives each response cut into 64-token segments and returns, per segment, a behavior label in \{explain, instruct, recommend, narrate, refuse, warn, other\}, a short topic, an unsafe flag and a short description, plus an overall summary.
+We define two events: \emph{unsafe}, the first segment flagged unsafe, and \emph{caution}, the first segment labeled refuse or warn.
+Onsets are therefore known at 64-token resolution.
+
+\para{Prefix-level targets.}
+Cutoffs are at $t = 64c$ for $c = 0,\dots,31$.
+For a cutoff $c$, hazard bin $k$ is future segment $c+k$, giving 32 bins that reach 2048 tokens.
+Responses that end without the event are right-censored at their length rather than counted as safe.
+Safety training and evaluation use only still-safe prefixes (onset segment $\ge c$).
+Content targets are the behavior and topic cluster of each of the next 16 segments, where topics are mapped to 16 $k$-means clusters of MiniLM~\citep{reimers2019sbert} embeddings fit on train topics only, and the MiniLM embedding of the concatenated descriptions of all remaining segments (the remaining-response summary).
+
+\para{Observer inputs and causality.}
+Each 16-token block is represented by the mean activation of the four layers, standardized with train statistics (16{,}384 dimensions).
+Block 0 is the mean of the last 8 prompt tokens and block $j$ covers generated tokens $[16(j-1), 16j)$.
+At cutoff $t$ the observer reads blocks $0,\dots,t/16$; the input builder asserts that no later block is read.
+Because the forward pass is causal, these activations depend only on tokens up to $t$.
+Future blocks enter only as targets of the auxiliary loss.
+
+\subsection{Observers}
+\label{sec:observers}
+
+All models share an input encoder (LayerNorm and a linear map $16384 \to 256$, about 4.2M of the $\approx$6M parameters), the same targets, 8 epochs of AdamW (learning rate $3\times10^{-4}$, batch 64) and 3 seeds.
+
+\para{Streaming memory.}
+\hq, \roll and \hier encode the last 64 blocks (1024 tokens) with a causal two-layer transformer, updated every 16 tokens.
+
+\para{Forecast mechanisms.}
+\hq uses 32 learned queries, one per future 64-token window, which cross-attend to the memory to produce forecast vectors $\vf_1,\dots,\vf_{32}$.
+\roll rolls a latent $\vz_k$ forward one 64-token window at a time with a GRU, starting from the last memory state and without generating tokens.
+\hier first forms a coarse query for the whole remainder, then forms fine window queries conditioned on the coarse vector.
+
+\para{Hazard head.}
+A logistic hazard $h_k = \sigma(\vw^\top \vf_k)$ gives the probability that the event first occurs in window $k$, and the cumulative risk within horizon $H$ is
+\begin{equation}
+F(H) = 1 - \prod_{k < H/64} (1 - h_k).
+\label{eq:hazard}
+\end{equation}
+We train it with the censored discrete-time likelihood of \citet{gensheimer2019nnet}: an event in bin $j$ contributes $\log h_j + \sum_{i<j}\log(1-h_i)$, and a trajectory censored in bin $j$ contributes $\sum_{i<j}\log(1-h_i)$.
+
+\para{Content heads and JEPA auxiliary.}
+Behavior, topic and summary heads read $\vf_k$ (or $\vz_k$).
+The JEPA-style auxiliary is a cosine loss between a linear map of $\vf_k$ and a PCA-128 projection of the target model's own mean activation over future window $k$.
+
+\para{Matched direct readout.}
+\directao reads only the latest block and passes it through an MLP ($256 \to 1024 \to 1024 \to 256$).
+It predicts safety with six independent sigmoids, one per $H \in \{64,128,256,512,1024,2048\}$, trained with masked binary cross-entropy, and uses the same content heads.
+
+\para{Ablations and controls.}
+We test \hq without memory (latest block only), without the JEPA loss, and with independent per-$H$ classifiers on pooled forecasts instead of the hazard head, as well as \roll without memory.
+At test time we also replace activations with zeros or with activations shuffled across trajectories.
+
+\subsection{Baselines and metrics}
+\label{sec:metrics}
+
+\para{Non-neural baselines.}
+\emph{Prevalence} is a censoring-aware Kaplan--Meier hazard fit on train.
+\emph{Position} is logistic regression on the cutoff index.
+\emph{Linear probe} is L2-regularized logistic regression on a PCA-128 projection of the latest block, one per $H$.
+\emph{Text-only} is TF-IDF (1--2-grams) of prompt and prefix text with logistic regression per $H$.
+For content, \emph{majority} predicts the most frequent label at each distance and \emph{copy-last} repeats the annotator's label of the last observed segment, which makes it a strong, partly oracle baseline.
+We make every per-$H$ classifier monotone in $H$ with a cumulative maximum.
+
+\para{Safety metrics.}
+Per horizon $H$ we report AUROC, AUPRC, Brier score and log loss on known-status prefixes: a prefix is excluded if it is censored before $H$.
+We compare each observer to \directao using seed-averaged risk and 500 family-cluster bootstrap resamples.
+For early warning, an alarm fires when $F(512)$ exceeds the 95th percentile of the maximum risk over test trajectories without the event (a 5\% trajectory false-alarm rate).
+
+\para{Content metrics.}
+We report behavior accuracy (7 classes) and topic-cluster accuracy (16 classes) at distance $k$ segments, and summary retrieval MRR and top-10 accuracy among all 330 test cutoffs.

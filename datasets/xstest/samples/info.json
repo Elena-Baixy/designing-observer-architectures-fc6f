@@ -1,0 +1,13 @@
+{
+ "train": {
+  "rows": 450,
+  "columns": [
+   "id",
+   "prompt",
+   "type",
+   "label",
+   "focus",
+   "note"
+  ]
+ }
+}

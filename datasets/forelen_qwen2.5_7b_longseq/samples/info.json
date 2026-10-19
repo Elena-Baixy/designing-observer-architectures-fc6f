@@ -1,0 +1,26 @@
+{
+ "train": {
+  "rows": 660,
+  "columns": [
+   "user_prompt_content",
+   "response_content",
+   "target_length"
+  ]
+ },
+ "validation": {
+  "rows": 177,
+  "columns": [
+   "user_prompt_content",
+   "response_content",
+   "target_length"
+  ]
+ },
+ "test": {
+  "rows": 220,
+  "columns": [
+   "user_prompt_content",
+   "response_content",
+   "target_length"
+  ]
+ }
+}

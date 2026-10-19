@@ -1,0 +1,47 @@
+\documentclass{article}
+\usepackage[final]{neurips_2025}
+\usepackage[hidelinks]{hyperref}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{multirow}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit}
+\usepackage[noend]{algpseudocode}
+
+% Import command files
+\input{commands/math}
+\input{commands/general}
+\input{commands/macros}
+
+\makeatletter
+\providecommand{\@trackname}{39th Conference on Neural Information Processing Systems (NeurIPS 2025).}
+\makeatother
+
+\bibliographystyle{plainnat}
+
+\title{Do Memory-Based Observers Forecast Further? A Matched Pilot Study of Long-Horizon Activation Forecasting in a Frozen LLM}
+
+\author{Xiaoyan Bai and NeuriCo}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/methodology}
+\input{sections/results}
+\input{sections/discussion}
+\input{sections/conclusion}
+
+\bibliography{references}
+
+\appendix
+\input{appendix/appendix}
+
+\end{document}

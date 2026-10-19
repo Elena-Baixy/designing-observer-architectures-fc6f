@@ -1,0 +1,13 @@
+# Exclude all data files (can be large)
+*
+
+# But include documentation and small samples
+!.gitignore
+!README.md
+!horizon_stats.txt
+!*/
+!**/README.md
+!**/samples/
+!**/samples/**
+!**/download.sh
+!**/download_instructions.txt

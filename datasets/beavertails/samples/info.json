@@ -1,0 +1,38 @@
+{
+ "330k_train": {
+  "rows": 300567,
+  "columns": [
+   "prompt",
+   "response",
+   "category",
+   "is_safe"
+  ]
+ },
+ "330k_test": {
+  "rows": 33396,
+  "columns": [
+   "prompt",
+   "response",
+   "category",
+   "is_safe"
+  ]
+ },
+ "30k_train": {
+  "rows": 27186,
+  "columns": [
+   "prompt",
+   "response",
+   "category",
+   "is_safe"
+  ]
+ },
+ "30k_test": {
+  "rows": 3021,
+  "columns": [
+   "prompt",
+   "response",
+   "category",
+   "is_safe"
+  ]
+ }
+}

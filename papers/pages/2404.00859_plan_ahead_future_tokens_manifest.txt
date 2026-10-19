@@ -1,0 +1,11 @@
+PDF: papers/2404.00859_plan_ahead_future_tokens.pdf
+Total pages: 24
+Pages per chunk: 4
+
+Chunks:
+  2404.00859_plan_ahead_future_tokens_chunk_001.pdf: pages 1-4
+  2404.00859_plan_ahead_future_tokens_chunk_002.pdf: pages 5-8
+  2404.00859_plan_ahead_future_tokens_chunk_003.pdf: pages 9-12
+  2404.00859_plan_ahead_future_tokens_chunk_004.pdf: pages 13-16
+  2404.00859_plan_ahead_future_tokens_chunk_005.pdf: pages 17-20
+  2404.00859_plan_ahead_future_tokens_chunk_006.pdf: pages 21-24

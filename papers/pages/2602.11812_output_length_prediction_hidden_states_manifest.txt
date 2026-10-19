@@ -1,0 +1,14 @@
+PDF: papers/2602.11812_output_length_prediction_hidden_states.pdf
+Total pages: 34
+Pages per chunk: 4
+
+Chunks:
+  2602.11812_output_length_prediction_hidden_states_chunk_001.pdf: pages 1-4
+  2602.11812_output_length_prediction_hidden_states_chunk_002.pdf: pages 5-8
+  2602.11812_output_length_prediction_hidden_states_chunk_003.pdf: pages 9-12
+  2602.11812_output_length_prediction_hidden_states_chunk_004.pdf: pages 13-16
+  2602.11812_output_length_prediction_hidden_states_chunk_005.pdf: pages 17-20
+  2602.11812_output_length_prediction_hidden_states_chunk_006.pdf: pages 21-24
+  2602.11812_output_length_prediction_hidden_states_chunk_007.pdf: pages 25-28
+  2602.11812_output_length_prediction_hidden_states_chunk_008.pdf: pages 29-32
+  2602.11812_output_length_prediction_hidden_states_chunk_009.pdf: pages 33-34

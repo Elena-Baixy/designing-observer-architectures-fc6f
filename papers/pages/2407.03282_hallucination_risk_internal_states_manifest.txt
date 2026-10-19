@@ -1,0 +1,10 @@
+PDF: papers/2407.03282_hallucination_risk_internal_states.pdf
+Total pages: 17
+Pages per chunk: 4
+
+Chunks:
+  2407.03282_hallucination_risk_internal_states_chunk_001.pdf: pages 1-4
+  2407.03282_hallucination_risk_internal_states_chunk_002.pdf: pages 5-8
+  2407.03282_hallucination_risk_internal_states_chunk_003.pdf: pages 9-12
+  2407.03282_hallucination_risk_internal_states_chunk_004.pdf: pages 13-16
+  2407.03282_hallucination_risk_internal_states_chunk_005.pdf: page 17

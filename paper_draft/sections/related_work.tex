@@ -1,0 +1,28 @@
+\section{Related Work}
+\label{sec:related}
+
+\para{Activation verbalizers.}
+Patchscopes~\citep{ghandeharioun2024patchscopes} and SelfIE~\citep{chen2024selfie} decode activations by patching them into a model's own forward pass.
+LatentQA~\citep{pan2024latentqa} trains a LoRA decoder to answer questions about properties of future completions from current prompt activations, and outperforms linear probes and untrained patching on persona identification and relation extraction.
+Activation Oracles~\citep{karvonen2025activation} scale this to about one million training examples across several models, including \qwen, and generalize to auditing tasks out of distribution.
+Predictive Concept Decoders~\citep{pcd2025} pretrain the decoder to predict the next 16 tokens, which improves detection of upcoming harmful output.
+All of these read a static window and answer without a time axis.
+Unlike them, we give the reader a memory of the whole trajectory and ask it to say \emph{when} an event occurs, up to 2048 tokens ahead.
+Our \directao baseline is a matched classification-head stand-in for these decoders, not an LLM decoder itself.
+
+\para{Lookahead in hidden states.}
+Future Lens~\citep{pal2023futurelens} finds that single hidden states predict tokens 1--3 positions ahead, with accuracy that decays quickly.
+Probes on the last prompt state predict global response properties such as length and answer choice~\citep{dong2025emergent}, and progressive remaining-length prediction improves during decoding over up to 32 steps~\citep{egtp2026}.
+Multi-token prediction~\citep{gloeckle2024mtp} and the Belief State Transformer~\citep{hu2024bst} study how much future information a model encodes.
+Building on these findings, we measure forecasting accuracy as a function of lead distance, at distances an order of magnitude longer.
+
+\para{Streaming safety monitors.}
+Constitutional Classifiers~\citep{sharma2025constitutional}, Qwen3Guard-Stream~\citep{qwen2025guard} and the Streaming Content Monitor~\citep{li2025scm} classify partial generations token by token.
+StreamGuard~\citep{stream2026guard} frames moderation as forecasting and supervises a value head with Monte Carlo rollouts.
+Survival framings of unsafe sampling~\citep{davidov2025time} count resampling attempts rather than tokens. Shallow safety alignment~\citep{qi2024shallow} shows that alignment acts mostly on the first few tokens, which explains why natural onsets are early.
+These monitors read text or token-level states and do not report performance by lead distance; we use activations, model censoring explicitly and stratify every metric by horizon.
+
+\para{Future-latent objectives and survival analysis.}
+Contrastive predictive coding~\citep{oord2018cpc}, next-latent prediction~\citep{nextlat2025}, hierarchical latent prediction~\citep{shi2026hilp} and JEPA-style objectives~\citep{assran2023ijepa} train representations to predict future embeddings.
+Discrete-time survival networks~\citep{gensheimer2019nnet} model event times with a logistic hazard per time bin and a likelihood that handles right-censoring; Cox-Time and DeepHit~\citep{kvamme2019coxtime,lee2018deephit} are alternatives.
+We reuse both ideas as observer components: a cosine loss to future-window activations and a censored logistic hazard over 64-token bins.

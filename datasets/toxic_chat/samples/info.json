@@ -1,0 +1,26 @@
+{
+ "train": {
+  "rows": 5082,
+  "columns": [
+   "conv_id",
+   "user_input",
+   "model_output",
+   "human_annotation",
+   "toxicity",
+   "jailbreaking",
+   "openai_moderation"
+  ]
+ },
+ "test": {
+  "rows": 5083,
+  "columns": [
+   "conv_id",
+   "user_input",
+   "model_output",
+   "human_annotation",
+   "toxicity",
+   "jailbreaking",
+   "openai_moderation"
+  ]
+ }
+}

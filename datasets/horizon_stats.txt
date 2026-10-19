@@ -1,0 +1,9 @@
+thinking_loc onset tokens into response: {'n': 569, 'mean': 57, 'p10': 23, 'p50': 47, 'p90': 111, 'max': 307}
+thinking_loc response length: {'n': 569, 'mean': 1094, 'p10': 635, 'p50': 1085, 'p90': 1569, 'max': 2055}
+thinking_loc frac onset>=256/512/1024/2048: [np.float64(0.002), np.float64(0.0), np.float64(0.0), np.float64(0.0)]
+response_loc onset tokens into response: {'n': 813, 'mean': 8, 'p10': 7, 'p50': 7, 'p90': 7, 'max': 106}
+response_loc response length: {'n': 813, 'mean': 84, 'p10': 33, 'p50': 82, 'p90': 137, 'max': 281}
+response_loc frac onset>=256/512/1024/2048: [np.float64(0.0), np.float64(0.0), np.float64(0.0), np.float64(0.0)]
+LongWriter-6k (500 sample) output tokens: {'n': 500, 'mean': 5418, 'p10': 2848, 'p50': 4744, 'p90': 8568, 'max': 25152}
+circuit_breakers harmful completion tokens: {'n': 500, 'mean': 372, 'p10': 256, 'p50': 402, 'p90': 456, 'max': 485}
+BeaverTails response tokens: {'n': 1000, 'mean': 69, 'p10': 19, 'p50': 66, 'p90': 123, 'max': 409}

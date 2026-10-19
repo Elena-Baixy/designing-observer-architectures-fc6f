@@ -1,0 +1,9 @@
+PDF: 2606.02609_building_better_activation_oracles.pdf
+Total pages: 14
+Pages per chunk: 4
+
+Chunks:
+  2606.02609_building_better_activation_oracles_chunk_001.pdf: pages 1-4
+  2606.02609_building_better_activation_oracles_chunk_002.pdf: pages 5-8
+  2606.02609_building_better_activation_oracles_chunk_003.pdf: pages 9-12
+  2606.02609_building_better_activation_oracles_chunk_004.pdf: pages 13-14

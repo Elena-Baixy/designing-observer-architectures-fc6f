@@ -1,0 +1,12 @@
+PDF: 2512.15712_predictive_concept_decoders.pdf
+Total pages: 28
+Pages per chunk: 4
+
+Chunks:
+  2512.15712_predictive_concept_decoders_chunk_001.pdf: pages 1-4
+  2512.15712_predictive_concept_decoders_chunk_002.pdf: pages 5-8
+  2512.15712_predictive_concept_decoders_chunk_003.pdf: pages 9-12
+  2512.15712_predictive_concept_decoders_chunk_004.pdf: pages 13-16
+  2512.15712_predictive_concept_decoders_chunk_005.pdf: pages 17-20
+  2512.15712_predictive_concept_decoders_chunk_006.pdf: pages 21-24
+  2512.15712_predictive_concept_decoders_chunk_007.pdf: pages 25-28

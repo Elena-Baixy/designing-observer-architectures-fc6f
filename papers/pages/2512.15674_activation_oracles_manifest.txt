@@ -1,0 +1,15 @@
+PDF: 2512.15674_activation_oracles.pdf
+Total pages: 38
+Pages per chunk: 4
+
+Chunks:
+  2512.15674_activation_oracles_chunk_001.pdf: pages 1-4
+  2512.15674_activation_oracles_chunk_002.pdf: pages 5-8
+  2512.15674_activation_oracles_chunk_003.pdf: pages 9-12
+  2512.15674_activation_oracles_chunk_004.pdf: pages 13-16
+  2512.15674_activation_oracles_chunk_005.pdf: pages 17-20
+  2512.15674_activation_oracles_chunk_006.pdf: pages 21-24
+  2512.15674_activation_oracles_chunk_007.pdf: pages 25-28
+  2512.15674_activation_oracles_chunk_008.pdf: pages 29-32
+  2512.15674_activation_oracles_chunk_009.pdf: pages 33-36
+  2512.15674_activation_oracles_chunk_010.pdf: pages 37-38

@@ -1,0 +1,11 @@
+PDF: /data/smallyan/neurico/random_ideas/designing-observer-architectures-fc6f/papers/2604.03962_streamguard_safety_forecasting.pdf
+Total pages: 22
+Pages per chunk: 4
+
+Chunks:
+  2604.03962_streamguard_safety_forecasting_chunk_001.pdf: pages 1-4
+  2604.03962_streamguard_safety_forecasting_chunk_002.pdf: pages 5-8
+  2604.03962_streamguard_safety_forecasting_chunk_003.pdf: pages 9-12
+  2604.03962_streamguard_safety_forecasting_chunk_004.pdf: pages 13-16
+  2604.03962_streamguard_safety_forecasting_chunk_005.pdf: pages 17-20
+  2604.03962_streamguard_safety_forecasting_chunk_006.pdf: pages 21-22

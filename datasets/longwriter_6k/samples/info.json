@@ -1,0 +1,8 @@
+{
+ "train": {
+  "rows": 6000,
+  "columns": [
+   "messages"
+  ]
+ }
+}

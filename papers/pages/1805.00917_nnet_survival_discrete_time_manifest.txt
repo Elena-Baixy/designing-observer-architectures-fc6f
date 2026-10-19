@@ -1,0 +1,10 @@
+PDF: papers/1805.00917_nnet_survival_discrete_time.pdf
+Total pages: 17
+Pages per chunk: 4
+
+Chunks:
+  1805.00917_nnet_survival_discrete_time_chunk_001.pdf: pages 1-4
+  1805.00917_nnet_survival_discrete_time_chunk_002.pdf: pages 5-8
+  1805.00917_nnet_survival_discrete_time_chunk_003.pdf: pages 9-12
+  1805.00917_nnet_survival_discrete_time_chunk_004.pdf: pages 13-16
+  1805.00917_nnet_survival_discrete_time_chunk_005.pdf: page 17

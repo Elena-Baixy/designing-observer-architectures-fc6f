@@ -1,0 +1,13 @@
+{
+ "train": {
+  "rows": 99442,
+  "columns": [
+   "filename",
+   "begin",
+   "end",
+   "challenging",
+   "prompt",
+   "continuation"
+  ]
+ }
+}

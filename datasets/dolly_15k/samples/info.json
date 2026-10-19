@@ -1,0 +1,11 @@
+{
+ "train": {
+  "rows": 15011,
+  "columns": [
+   "instruction",
+   "context",
+   "response",
+   "category"
+  ]
+ }
+}

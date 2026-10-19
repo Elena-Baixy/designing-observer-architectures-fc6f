@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\small
+\caption{Cost on one RTX A6000. About 4.2M parameters of each budget are the shared $16384\to256$ input projection.}
+\label{tab:cost}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Train time / seed} & \textbf{Latency / 16-token update} \\
+\midrule
+\directao & 6.00M & 1 s & 0.9 ms \\
+\hq & 5.97M & 3 s & 2.3 ms \\
+\roll & 5.84M & 4 s & 3.8 ms \\
+\hier & 6.04M & 3 s & 2.5 ms \\
+\bottomrule
+\end{tabular}
+\end{table}

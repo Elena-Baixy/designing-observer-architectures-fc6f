@@ -1,0 +1,13 @@
+PDF: papers/2404.19737_multi_token_prediction.pdf
+Total pages: 29
+Pages per chunk: 4
+
+Chunks:
+  2404.19737_multi_token_prediction_chunk_001.pdf: pages 1-4
+  2404.19737_multi_token_prediction_chunk_002.pdf: pages 5-8
+  2404.19737_multi_token_prediction_chunk_003.pdf: pages 9-12
+  2404.19737_multi_token_prediction_chunk_004.pdf: pages 13-16
+  2404.19737_multi_token_prediction_chunk_005.pdf: pages 17-20
+  2404.19737_multi_token_prediction_chunk_006.pdf: pages 21-24
+  2404.19737_multi_token_prediction_chunk_007.pdf: pages 25-28
+  2404.19737_multi_token_prediction_chunk_008.pdf: page 29

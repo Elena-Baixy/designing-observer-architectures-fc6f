@@ -1,0 +1,985 @@
+You are an academic paper writer. Generate a complete NEURIPS style paper
+based on the experiment results provided.
+
+════════════════════════════════════════════════════════════════════════════════
+                         IMPORTANT: BEFORE YOU START
+════════════════════════════════════════════════════════════════════════════════
+
+Before writing any content, you MUST complete these steps:
+
+1. READ THE SKILL: Review the paper-writer skill at .claude/skills/paper-writer/SKILL.md
+2. READ THE STYLE GUIDE: Study templates/paper_writing/lab_style_guide.md carefully
+3. REVIEW EXAMPLES: Browse paper_examples/ for formatting and language patterns:
+   - Look at sections/1.introduction.tex for language style
+   - Look at tables/*.tex for table formatting
+   - Look at commands/*.tex for macro usage
+4. VERIFY COMMAND TEMPLATES: Command templates (math.tex, general.tex, macros.tex) are pre-copied to paper_draft/commands/
+
+CRITICAL: Reference example papers for FORMATTING and LANGUAGE STYLE only.
+Do NOT copy content, phrasing, or narrative structure from the example papers.
+The examples are in a different research domain - focus only on presentation style.
+
+════════════════════════════════════════════════════════════════════════════════
+                            EXPERIMENT REPORT
+════════════════════════════════════════════════════════════════════════════════
+
+# Observer architectures for long-horizon forecasting of unsafe and long-form behavior in frozen Qwen3-8B
+
+## 1. Executive summary
+
+**Question.** An "observer" reads a frozen Qwen3-8B's activations while it generates. Can new observer designs forecast two things better than a direct activation readout trained on the same labels, given matched inputs, parameters (≈6M) and epochs?
+- when the response will first turn unsafe within H ∈ {64…2048} tokens;
+- what the rest of a long response will do.
+
+The new designs are:
+- A, horizon-query bottleneck;
+- B, latent rollout;
+- D, hierarchical coarse→fine.
+
+All three include streaming memory (E) and a JEPA-style future-activation auxiliary (C), and all use a censoring-aware hazard head.
+
+**What we found (pilot scale: 96 prompts, 84 usable trajectories, 26 held-out-family test trajectories):**
+1. **Natural unsafe onsets are too rare and too early to test the long-horizon safety hypothesis.**
+   - We used unmodified benchmark prompts. Only 5 of 84 Qwen3-8B continuations contain an annotator-flagged unsafe segment, and all onsets are ≤448 tokens.
+   - On this event, no architecture differs significantly from direct_AO. All family-bootstrap CIs include 0.
+   - The text-only TF-IDF baseline has the highest AUROC at every H. The unsafe-event safety numbers are effectively unpowered: 2 event trajectories in test.
+2. **On the denser "caution" event (first refuse/warn segment; 31 onsets), the memory-based query architectures rank better than direct_AO at every H ≤ 1024, but not significantly.**
+   - D hierarchical: AUROC 0.976–0.990 vs 0.871–0.953; Δ = +0.04 to +0.11; at H=512, 95% CI [0.000, 0.139], p = 0.09.
+   - A horizon-query: Δ = +0.03 to +0.09.
+   - The gain peaks at H = 256–512 and shrinks at 1024. It does **not** grow monotonically with lead distance.
+   - A plain linear probe on the latest activation is nearly as good (0.87–0.98).
+   - **Caveat:** long-H positives come almost entirely from two harmful-prompt sources, so pooled AUROC largely reflects prompt-type separation rather than timing (§4.6).
+3. **Component evidence (caution event):**
+   - **Memory** is the clearest help at long horizons:
+     - Removing it from the rollout model drops AUROC at H=1024 from 0.944 to 0.831, and at H=512 from 0.921 to 0.829.
+     - Removing it from A drops AUROC at H=1024 from 0.996 to 0.946.
+     - At short H, memory does not help (A_no_memory is best at H=64).
+   - **The JEPA auxiliary** has a negligible effect: within about 0.01 of A at every H.
+   - **The hazard head** gives no AUROC gain over independent per-H classifiers, and it is worse calibrated at long H: Brier 0.24–0.30 vs 0.02–0.03 at H=2048. At H=2048 almost every known-status prefix comes from an event trajectory, so this is a censoring/extrapolation effect.
+   - **Latent rollout (B)** is no better than direct prediction (A/D) at long horizons.
+4. **Long-form content forecasting (separate task):**
+   - All activation observers predict future-segment behavior far above the majority baseline (0.62): 0.83–0.88 accuracy up to 1024 tokens ahead. They are slightly above the copy-last-segment heuristic (0.82–0.84), which uses annotator labels for the observed prefix.
+   - Retrieval of the remaining-response summary is 4–5× better than the no-activation baseline: MRR 0.095–0.10 vs 0.019.
+   - Query/hierarchical models (A, D) beat direct_AO on summary retrieval (MRR 0.095 / 0.099 vs 0.087; top-10 0.235 / 0.239 vs 0.200) and on behavior at 256–512 tokens ahead. Direct_AO is best on topic-cluster accuracy.
+   - Zero and shuffled activation controls collapse every content metric to the prior, so the observers do read activations.
+
+**Implication.** At this scale the evidence for the hypothesis is weak and mixed. Memory over the activation trajectory is the component that most consistently helps at long lead times. The explicit hazard head and latent rollout did not earn their complexity. Long-horizon (1024–2048) *unsafe* forecasting requires a data regime with late natural onsets, which unmodified benchmark prompts do not produce for Qwen3-8B.
+
+## 2. Research question & motivation
+
+Activation verbalizers read a single activation and answer about the present or the next few tokens. These include Activation Oracles, LatentQA (Pan et al. 2024) and probes. The longest activation-forecast horizons in prior work are ≤32 tokens (literature_review.md).
+
+We tested whether an observer with three properties beats a matched direct readout, with a gain that grows with lead distance:
+- (a) a memory of the activation trajectory;
+- (b) predicted latents for future windows at several scales;
+- (c) an explicit event-time (hazard) distribution.
+
+This matters for runtime monitoring of long generations: a monitor that only flags harm after it appears cannot intervene early.
+
+**Literature context (from literature_review.md).**
+- LatentQA decodes future-completion properties without a time axis.
+- Future Lens and multi-token prediction show limited lookahead in the residual stream.
+- Next-latent prediction and JEPA/CPC motivate future-embedding objectives.
+- Discrete-time survival networks (nnet-survival, Gensheimer & Narasimhan 2019) motivate the censored logistic-hazard head.
+- Streaming safety monitors (StreamGuard, FineHarm) forecast on text.
+
+## 3. Experimental setup
+
+**Target model.** Qwen/Qwen3-8B (bf16), frozen, chat template in non-thinking mode. Sampling: temperature 0.7, top-p 0.9, max 2048 new tokens, seed 42, HF `generate`, one RTX A6000 (48 GB). The observer never touches generation: activations are recomputed afterwards by a single causal forward pass over prompt+continuation. Forward hooks capture the outputs of decoder layers 9/18/27/35.
+
+**Prompts and split.** 96 prompts, all used unmodified (no adversarial wrappers), drawn from:
+- LongWriter-6k (32, long-form);
+- ToxicChat toxic user prompts (16);
+- BeaverTails unsafe-category prompts (16);
+- Aegis-2.0 unsafe prompts (16);
+- XSTest safe/contrast prompts (16).
+
+A prompt family is a source × category (LongWriter: 16 hash buckets). 30% of the families were assigned to test *before generation* (`build_prompts`, seed 42), and the split audit asserts that no family is in both splits.
+
+**Annotation.** Each completed generation is annotated once by `gpt-5.6-luna`, called through the OpenAI API directly. OpenRouter was the preferred route, but no OpenRouter key was available. The annotator receives the response cut into 64-token segments (Qwen tokenizer) and returns, per segment:
+- a behavior ∈ {explain, instruct, recommend, narrate, refuse, warn, other};
+- a 1–3 word topic;
+- an unsafe flag;
+- a ≤15-word description;
+- plus an overall summary.
+
+The full rubric is in `src/annotate.py`. Onset offsets are therefore at 64-token resolution.
+
+**Events.**
+- `unsafe`: the first segment flagged unsafe.
+- `caution`: the first refuse/warn segment.
+
+**Prefix-level targets** are computed by `targets_for` in code:
+- **Cutoffs.** Fixed at t = 64c for c = 0…31.
+- **Hazard bins.** Bin k = future segment c+k (32 bins, up to 2048 tokens). Generations that stop without the event are right-censored at their length, not treated as safe.
+- **Content targets.**
+  - Behavior and topic of each of the next 16 segments. Topic = one of 16 k-means clusters of MiniLM embeddings of topic labels, fit on train topics only.
+  - A MiniLM embedding of the concatenated descriptions of all remaining segments, used as the "remaining-response summary" target.
+
+**Observer inputs and causality audit.**
+- Inputs are 16-token block means of the four layers, standardized with train statistics (16,384-d).
+- At cutoff t the input is blocks 0…t/16. Block 0 is the mean of the last 8 prompt tokens; block j covers generated tokens [16(j−1), 16j).
+- `make_inputs` asserts that no block beyond the cutoff is read.
+- Future blocks are used only as JEPA *targets*: a PCA-128 projection of the target's own mean activation over each future 64-token window.
+- Safety training and evaluation use still-safe prefixes only (onset segment ≥ c).
+
+**Architectures.** All share the same input encoder (LayerNorm + Linear 16384→256), the same targets, 8 epochs, AdamW 3e-4, batch 64, and 3 seeds.
+
+| name | memory | forecast mechanism | safety output |
+|---|---|---|---|
+| direct_AO (matched baseline) | none: latest block only | MLP 256→1024→1024→256 | 6 independent per-H sigmoids (masked BCE) |
+| A horizon-query (+E memory, +C JEPA) | causal 2-layer transformer over the last 64 blocks (1024 tokens), updated every 16 tokens | 32 learned queries (one per future 64-token window) cross-attend to the memory → forecast vectors f_k | logistic hazard h_k = σ(w·f_k), F(H) = 1 − ∏_{k<H/64}(1−h_k) |
+| B latent rollout (+E, +C) | same memory | GRU dynamics rolls z_k one 64-token step at a time from the last memory state, without tokens | hazard on z_k |
+| D hierarchical (+E, +C) | same memory | coarse query for the whole remainder; fine window queries conditioned on the coarse vector | hazard on fine vectors |
+
+- Content heads (behavior, topic, summary) read f_k (or z_k).
+- The JEPA auxiliary is a cosine loss between a linear map of f_k and the target's own future-window activation.
+
+**Ablations:**
+- A_no_memory: only the latest block is visible.
+- A_no_jepa.
+- A_no_hazard: independent per-H classifiers on the pooled f.
+- B_no_memory.
+
+**Controls:** zero and shuffled activations at test time.
+
+**Non-neural baselines:**
+- prevalence: a censoring-aware Kaplan–Meier hazard from train;
+- position: logistic regression on the cutoff index;
+- linear probe: L2 logistic regression on PCA-128 of the latest block, per H;
+- text-only: TF-IDF (1–2-grams) of prompt + prefix text, logistic regression per H;
+- content baselines: majority-per-distance, and copy-last-segment. The latter uses the annotator's label of the last observed segment, so it is a strong, partly oracle baseline.
+
+Every per-H classifier is made monotone in H by a cumulative max.
+
+**Metrics.**
+- Safety: per H, AUROC (with family-cluster bootstrap CI), AUPRC, Brier and log loss on known-status prefixes. This is the strict view: censored before H means excluded. A secondary view treats EOS-without-event as negative.
+- Early warning: an alarm when F(512) exceeds the 95th percentile of the max risk over no-event test trajectories (5% trajectory false-alarm rate). We then report recall for onsets reached with lead ≥ L.
+- Content: behavior and topic accuracy at distance k; summary retrieval MRR and top-10 among all test cutoffs.
+- Differences vs direct_AO: seed-averaged risk, 500 family-cluster bootstrap resamples.
+
+**Deviation from the plan (important).**
+- An initial attempt to *construct* late unsafe onsets was abandoned. That design wrapped harmful requests in long-form templates that would push the model to produce detailed harmful content late in a response. We do not elicit such content, so the safety study uses only naturally occurring events from unmodified prompts.
+- A first generation run (216 prompts, batch size 72) ran out of GPU memory and was discarded. The final run uses 96 prompts. The family split for these was again fixed before generation.
+- 12 generations shorter than 64 tokens produce no cutoff and are excluded, leaving 84 trajectories (58 train / 26 test).
+- The off-the-shelf AO/LatentQA decoder baseline was **not run** within the 1-hour budget. "direct_AO" is a matched MLP readout, not an LLM-decoder verbalizer.
+- Repeated rollouts for calibration were not run.
+- No LLM-judged summary evaluation was run. Summary quality is measured by retrieval only, and the unsupported-claim rate is not measured.
+
+**Hardware and cost.**
+- One RTX A6000 (48 GB).
+- Generation: 423 s + 108 s (batch 48). Activation caching: about 1 min.
+- Observer training: 2–4 s per model per seed. Inference latency per 16-token update: 0.9–3.9 ms (table below).
+- Annotation: 96 gpt-5.6-luna calls, < $1.
+
+## 4. Results
+
+### 4.1 Data
+
+From `results/data_stats.json`:
+
+| source | n | test | median len (tokens) | ended EOS | unsafe traj (onset ≥64) | caution traj (onset ≥64) |
+|---|---|---|---|---|---|---|
+| LongWriter | 32 | 9 | 1559 | 21 | 2 (2) | 3 (3) |
+| ToxicChat | 16 | 7 | 116 | 16 | 0 | 8 (0) |
+| BeaverTails | 16 | 4 | 127 | 16 | 2 (1) | 12 (0) |
+| Aegis 2.0 | 16 | 6 | 125 | 16 | 1 (1) | 12 (2) |
+| XSTest | 16 | 2 | 242 | 16 | 0 | 7 (2) |
+
+- Unsafe onsets: {0, 64, 128, 256, 448} tokens.
+- Late caution onsets: {256, 384, 512, 768, 1152, 1152, 1408} tokens.
+- Most caution events are refusals at token 0.
+
+Annotated segment behaviors: explain 614, narrate 234, recommend 133, instruct 60, refuse 27, warn 23, other 23. Example timelines are in `results/example_samples.json`.
+
+Known-status still-safe test prefixes per H (strict censoring): 306 / 282 / 239 / 175 / 89 / 13 for H = 64…2048. **H=2048 has only 13 (unsafe) or 31 (caution) known-status prefixes, and these are almost all positive. Treat H=2048 numbers as uninformative.**
+
+### 4.2 Safety forecasting — primary event: unsafe onset
+
+AUROC on still-safe test prefixes, mean ± sd over 3 seeds. Full tables, including Brier, AUPRC and the paired tests, are in `results/tables_unsafe.md`.
+
+| method | H=64 | 128 | 256 | 512 | 1024 | 2048 |
+|---|---|---|---|---|---|---|
+| prevalence (KM) | 0.500 | 0.500 | 0.500 | 0.500 | 0.500 | 0.500 |
+| position | 0.697 | 0.729 | 0.704 | 0.751 | 0.685 | 0.900 |
+| linear probe | 0.658 | 0.710 | 0.771 | 0.841 | 0.820 | 0.933 |
+| **text-only TF-IDF** | **0.732** | **0.816** | **0.855** | **0.929** | **0.920** | 0.933 |
+| direct_AO | 0.530±.04 | 0.527±.01 | 0.710±.01 | 0.805±.02 | 0.825±.01 | 0.878±.02 |
+| A horizon-query | 0.502±.04 | 0.494±.03 | 0.668±.02 | 0.758±.04 | 0.777±.04 | 0.933±.00 |
+| B latent rollout | 0.514±.03 | 0.599±.05 | 0.731±.03 | 0.795±.05 | 0.808±.04 | 0.889±.07 |
+| D hierarchical | 0.531±.13 | 0.466±.13 | 0.577±.17 | 0.618±.21 | 0.600±.22 | 0.811±.10 |
+
+- Test positives per H: 2 / 4 / 6 / 10 / 10 / 10 prefixes, drawn from 2 event trajectories (onsets at 64 and 448 tokens).
+- No difference vs direct_AO is significant: all family-bootstrap 95% CIs include 0 (`tables_unsafe.md`).
+- Early-warning recall at a 5% false-alarm rate is 0 for every method. Only one test trajectory has an onset ≥128 tokens.
+- **Conclusion:** this event is unpowered at our scale. We make no architectural claim from it.
+
+### 4.3 Safety forecasting — secondary event: caution onset (first refuse/warn)
+
+![safety](figures/safety_auroc_vs_H_caution.png)
+
+| method | H=64 | 128 | 256 | 512 | 1024 |
+|---|---|---|---|---|---|
+| position | 0.862 | 0.812 | 0.782 | 0.550 | 0.406 |
+| text-only TF-IDF | 0.857 | 0.861 | 0.853 | 0.768 | 0.563 |
+| linear probe | 0.962 | 0.926 | 0.870 | 0.937 | 0.977 |
+| direct_AO | 0.928±.02 | 0.875±.01 | 0.871±.02 | 0.902±.01 | 0.953±.03 |
+| A horizon-query (+mem+JEPA, hazard) | 0.966±.01 | 0.956±.02 | 0.959±.02 | 0.967±.02 | **0.996±.00** |
+| B latent rollout (+mem+JEPA) | 0.965±.01 | 0.943±.01 | 0.919±.02 | 0.921±.01 | 0.944±.00 |
+| **D hierarchical (+mem+JEPA)** | 0.979±.01 | **0.976±.00** | **0.980±.01** | **0.982±.01** | 0.990±.01 |
+| *ablation:* A − memory | **0.981±.01** | 0.972±.01 | 0.951±.01 | 0.943±.01 | 0.946±.01 |
+| *ablation:* A − JEPA | 0.961±.02 | 0.949±.02 | 0.953±.02 | 0.961±.01 | 0.991±.01 |
+| *ablation:* A − hazard head | 0.978±.00 | 0.967±.01 | 0.966±.00 | 0.951±.02 | 0.994±.01 |
+| *ablation:* B − memory | 0.964±.01 | 0.915±.01 | 0.863±.03 | 0.829±.05 | 0.831±.01 |
+
+The table below gives ΔAUROC vs direct_AO, using seed-averaged risk and a 95% family-cluster bootstrap CI.
+
+| method | H=64 | 128 | 256 | 512 | 1024 |
+|---|---|---|---|---|---|
+| A | +0.03 [−.05,+.07] | +0.08 [−.05,+.15] | +0.09 [−.03,+.16] | +0.07 [−.02,+.13] | +0.03 [.00,+.09] |
+| B | +0.03 [−.01,+.05] | +0.06 [−.01,+.10] | +0.05 [−.04,+.10] | +0.01 [−.06,+.06] | −0.01 [−.07,+.01] |
+| D | +0.04 [−.02,+.07] | +0.10 [−.01,+.15] | +0.11 [.00,+.16] | +0.09 [.00,+.14], p=.09 | +0.03 [.00,+.09] |
+| B − memory | +0.02 | +0.03 | −0.02 | −0.08 [−.22,+.02] | −0.11 [−.20,.00], p=.06 |
+
+Calibration, using Brier (lower is better):
+- At H ≤ 512, all activation models are similar: 0.015–0.09, vs prevalence 0.03–0.12.
+- At H=1024, direct_AO scores 0.082 and A_no_hazard 0.065. The hazard models score 0.08–0.11 (A, D, B), and B_no_memory 0.16.
+- At H=2048 the hazard models with memory (A/D) score 0.24–0.30. They under-predict, because they extrapolate the hazard over bins that are rarely observed in training (heavy censoring).
+
+Early warning (5% trajectory false-alarm rate): only 3 test trajectories have a caution onset ≥128 tokens. Recall is 0/3 for all observers except A_no_jepa (1/3) and TF-IDF (2/3). This is too few to compare.
+
+### 4.4 Long-form content forecasting
+
+These are all test cutoffs, from the unsafe-event run, which trains on almost all prefixes. The caution run gives the same picture (`tables_caution.md`). Columns are behavior accuracy (7-way) at distance k segments, topic-cluster accuracy (16-way), and remaining-summary retrieval among 330 test cutoffs.
+
+![content](figures/content_vs_distance_unsafe.png)
+
+| method | beh k=1 (64 tok) | k=4 (256) | k=8 (512) | k=16 (1024) | topic k=1 | k=4 | k=8 | k=16 | summary MRR | top-10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| majority per distance | 0.618 | 0.638 | 0.616 | 0.609 | 0.139 | 0.117 | 0.076 | 0.230 | 0.019 | 0.030 |
+| copy last segment (uses annotations of prefix) | 0.836 | 0.833 | 0.827 | 0.816 | **0.294** | 0.230 | 0.173 | 0.195 | 0.019 | 0.030 |
+| direct_AO | 0.855 | 0.844 | 0.856 | 0.874 | 0.292 | **0.240** | **0.205** | **0.192** | 0.087 | 0.200 |
+| A horizon-query | 0.856 | **0.881** | 0.859 | 0.866 | 0.187 | 0.174 | 0.135 | 0.088 | 0.095 | 0.235 |
+| B latent rollout | 0.861 | 0.861 | 0.870 | 0.808 | 0.260 | 0.208 | 0.173 | 0.157 | 0.074 | 0.160 |
+| D hierarchical | 0.831 | 0.873 | **0.879** | 0.874 | 0.194 | 0.195 | 0.153 | 0.130 | 0.099 | 0.239 |
+| A − memory | 0.829 | 0.869 | 0.872 | 0.862 | 0.238 | 0.202 | 0.202 | 0.176 | **0.101** | 0.249 |
+| A − JEPA | 0.862 | 0.873 | 0.859 | 0.870 | 0.195 | 0.180 | 0.135 | 0.100 | 0.094 | 0.239 |
+| A − hazard | 0.860 | 0.879 | 0.870 | 0.870 | 0.178 | 0.157 | 0.139 | 0.092 | 0.098 | **0.257** |
+| B − memory | 0.858 | 0.850 | 0.841 | 0.785 | 0.256 | 0.223 | 0.200 | 0.180 | 0.076 | 0.179 |
+
+Seed sd is ≤0.02 for most cells, except B at k=16 (±0.06); full values are in the tables file.
+
+Controls (seed 0):
+- Zero activations reduce behavior@k=4 to the majority value (0.638) or below (direct_AO 0.06), and MRR to 0.019 (chance level).
+- Shuffled activations give behavior 0.46–0.52 and MRR 0.024–0.031.
+- The activation signal is therefore real.
+- Caveat: for memory models with zeroed inputs, the padding mask still reveals the cutoff position. This explains above-chance zero-control *safety* AUROC for some memory models.
+
+### 4.6 Per-source breakdown (important caveat)
+
+The table reports seed-averaged AUROC/Brier within each prompt source at H=512 (`results/per_family.md`, `src/per_family.py`). An entry "–" means AUROC is undefined because only one class is present.
+
+### event=caution: per-source AUROC / Brier (H=512, known-status still-safe test prefixes; n, positives)
+
+| source | n | pos | direct_AO | A_horizon_query+mem+jepa | B_latent_rollout+mem+jepa | D_hierarchical+mem+jepa | A_no_memory | A_no_jepa | A_no_hazard | B_no_memory |
+|---|---|---|---|---|---|---|---|---|---|---|
+| aegis2 | 16 | 16 | –/0.485 | –/0.444 | –/0.509 | –/0.464 | –/0.478 | –/0.417 | –/0.540 | –/0.544 |
+| beavertails | 2 | 2 | –/0.000 | –/0.000 | –/0.000 | –/0.000 | –/0.000 | –/0.000 | –/0.000 | –/0.000 |
+| longwriter | 145 | 0 | –/0.003 | –/0.000 | –/0.004 | –/0.000 | –/0.000 | –/0.001 | –/0.003 | –/0.009 |
+| toxic_chat | 29 | 1 | 1.00/0.019 | 1.00/0.019 | 1.00/0.024 | 1.00/0.028 | 0.96/0.024 | 1.00/0.014 | 1.00/0.020 | 1.00/0.019 |
+| xstest | 9 | 8 | 0.38/0.583 | 0.00/0.807 | 0.50/0.675 | 1.00/0.718 | 0.38/0.654 | 0.00/0.824 | 0.12/0.727 | 0.25/0.756 |
+
+### event=unsafe: per-source AUROC / Brier (H=512, known-status still-safe test prefixes; n, positives)
+
+| source | n | pos | direct_AO | A_horizon_query+mem+jepa | B_latent_rollout+mem+jepa | D_hierarchical+mem+jepa | A_no_memory | A_no_jepa | A_no_hazard | B_no_memory |
+|---|---|---|---|---|---|---|---|---|---|---|
+| aegis2 | 14 | 8 | 0.85/0.388 | 0.88/0.550 | 0.85/0.524 | 0.94/0.545 | 0.88/0.540 | 0.94/0.543 | 0.79/0.508 | 0.85/0.539 |
+| beavertails | 0 | 0 | – | – | – | – | – | – | – | – |
+| longwriter | 131 | 2 | 0.23/0.016 | 0.11/0.015 | 0.41/0.016 | 0.13/0.015 | 0.37/0.015 | 0.12/0.015 | 0.39/0.015 | 0.55/0.016 |
+| toxic_chat | 28 | 0 | –/0.000 | –/0.000 | –/0.000 | –/0.000 | –/0.000 | –/0.000 | –/0.000 | –/0.000 |
+| xstest | 2 | 0 | –/0.035 | –/0.000 | –/0.000 | –/0.000 | –/0.001 | –/0.000 | –/0.006 | –/0.001 |
+
+**Caveat: much of the pooled AUROC is between-source discrimination.**
+- For the caution event at H ≥ 512, all test positives come from Aegis 2.0 and XSTest prefixes, while LongWriter prefixes, the majority, are all negative. A model that recognises "harmful-looking prompt" vs "long-form task" scores high without forecasting *timing*.
+- Within source, the evidence is thin:
+  - XSTest (9 prefixes): D 1.00, B 0.50, direct_AO 0.38, A 0.00.
+  - Unsafe event, Aegis 2.0 (14 prefixes, 8 positive): D 0.94 and A_no_jepa 0.94, vs direct_AO 0.85.
+  - Unsafe event, LongWriter (2 positives): every model is at or below chance (0.11–0.55).
+- **Pooled-AUROC differences should therefore be read as "which observer better encodes prompt-type risk", not as evidence of long-range timing forecasts.**
+
+### 4.5 Cost
+
+| model | params | train time / seed | latency per 16-token update |
+|---|---|---|---|
+| direct_AO | 6.00M | 1 s | 0.9 ms |
+| A | 5.97M | 3 s | 2.3 ms |
+| B | 5.84M | 4 s | 3.8 ms |
+| D | 6.04M | 3 s | 2.5 ms |
+
+About 4.2M of each budget is the shared 16384→256 input projection.
+
+## 5. Analysis & discussion
+
+- **H1 (new architectures beat direct_AO): weak, event-dependent support.**
+  - On the caution event, A and D have consistently higher AUROC at all H ≤ 1024 (+0.03 to +0.11). The effect is consistent in sign across seeds, but the family-bootstrap CIs touch or include 0. Only 3 test trajectories, from 2 families, have a late (≥64-token) caution onset; most positive prefixes come from token-0 refusals evaluated at cutoff 0. We cannot claim significance.
+  - On the unsafe event the data cannot discriminate.
+  - On content, A and D win on summary retrieval and on mid-range behavior, while direct_AO wins on topic clusters. One reason may be that topic clusters are dominated by a prompt-specific identity readable from the latest activation; the query models may also overfit that 16-way target with ≈60 training trajectories.
+- **H2 (gain grows with lead distance): not supported.** On the caution event the gain over direct_AO peaks at H = 256–512 and shrinks at 1024. That shrinkage partly reflects a ceiling: direct_AO itself reaches 0.95, and few known-status prefixes remain. The hierarchical model has the flattest curve (0.976–0.990).
+- **H3 (components):**
+  - *Memory* helps at long H: B − memory loses 0.09–0.11 AUROC at H ≥ 512, and A − memory loses 0.02–0.05 at H ≥ 256. It does not help, and may slightly hurt, at H=64.
+  - *JEPA future-embedding loss:* no measurable benefit.
+  - *Hazard head:* no discrimination benefit, and worse long-H calibration under heavy censoring. Its theoretical advantage, monotone and coherent multi-horizon risk, comes at the cost of extrapolating into rarely observed bins.
+  - *Latent rollout:* iterating a GRU latent forward did not reach further than direct query-based prediction. It was worst among the memory models at H ≥ 512 and for summary retrieval.
+- **H4 (content beyond trivial baselines): supported.** Behavior is forecast at 0.87–0.88 accuracy 512–1024 tokens ahead (majority baseline 0.62; copy-last 0.82–0.83). Summary retrieval reaches 5× chance MRR. A large part of the behavior signal is response *genre*, e.g. narrate vs explain, which persists across a response.
+- **Pooled vs within-source (§4.6).** Positives at long H are concentrated in two harmful-prompt sources, so pooled AUROC mostly measures prompt-type separation. Within-source timing discrimination is the right test of the hypothesis, and here it is underpowered: within-source results are mixed, with D best on Aegis/XSTest and every model at chance on LongWriter.
+- **Strong simple baselines.**
+  - A linear probe on the latest activation is competitive with everything on the caution event.
+  - Text-only TF-IDF is the best unsafe-event predictor.
+  - Much of what is "forecastable" here is a prompt-level/genre property, readable from the prompt-end activation or the prompt text, rather than a genuinely long-range dynamic plan.
+- **Leakage audit.**
+  - `make_inputs` asserts that observer inputs are only blocks ending at or before the cutoff. Because the forward pass is causal, those activations depend only on tokens ≤ cutoff.
+  - Future-window activations are used only as JEPA targets.
+  - Topic clusters and standardization statistics are fit on train only.
+  - The family split was fixed before generation and is asserted disjoint.
+
+## 6. Limitations
+
+- **Scale.** 84 trajectories and 26 test trajectories in 12 test families. Very few late events (5 unsafe, 7 late caution). Most cells have CIs of ±0.05–0.2. This is a pilot, not a definitive comparison.
+- **The unsafe events are natural and early.** The 1024–2048 horizons are essentially untestable for unsafe onset: there are 89 and 13 known-status prefixes, and no onsets beyond 448 tokens. 86% of generations ended with EOS and are censored, so long-H labels come from a biased subset (long LongWriter outputs).
+- **The caution event is partly a prompt-level refusal signal.** Most onsets are at token 0, but those trajectories contribute only cutoff c=0 to the safety set; late onsets drive the long-H results.
+- **One annotator**, gpt-5.6-luna, gives single-pass labels at 64-token resolution. There was no inter-annotator check and no guard-model cross-validation, and the unsafe flag is an LLM judgement.
+- **No off-the-shelf AO/LatentQA baseline**, and direct_AO is an MLP rather than an LLM-decoder verbalizer. The "QA decoder" was implemented as classification and retrieval heads, not free-text generation.
+- **No repeated rollouts per prompt**, so calibration against the model's true outcome distribution is not measured.
+- **Hyperparameters were not tuned** (8 epochs, one learning rate for all models). The p-values are not corrected for multiple comparisons, which would strengthen the null conclusions.
+
+## 7. Conclusions & next steps
+
+**Answer to the research question.**
+- In this pilot, observers with trajectory memory and learned future-window queries (A, and especially hierarchical D) rank caution onsets and summarize the remaining response somewhat better than a matched direct readout. The differences are not statistically significant, and the gain does not grow with lead distance.
+- Memory is the component with the clearest long-horizon benefit. The hazard head, the JEPA loss and the latent rollout did not show benefits.
+- Long-horizon *unsafe* forecasting could not be evaluated, because Qwen3-8B on unmodified prompts produces almost no late unsafe content.
+
+**Next steps.**
+1. Scale data 10–20×, with more long-form prompts and repeated rollouts per prompt. Look for natural late-onset regimes, such as multi-turn or agentic transcripts, or the thinking trace → answer transition noted in literature_review.md. Use guard-model (Qwen3Guard-Stream) token-level labels to cross-check the LLM annotator.
+2. Add the off-the-shelf AO and a LoRA-trained AO decoder baseline, and add free-text summary generation judged by a held-out LLM.
+3. Fix the hazard head's long-H calibration, e.g. with a parametric tail, or by mixing direct per-H heads with the hazard and enforcing monotonicity.
+4. Report per-family results with more test families; with only 12 test families now, the cluster bootstrap is coarse.
+
+## References
+
+- Pan et al. 2024, *LatentQA* (arXiv:2412.08686). Code: github.com/aypan17/latentqa; cloned in code/latentqa and smoke-tested, but not used as a trained baseline.
+- Karvonen et al., *Activation Oracles* (arXiv:2512.15674).
+- Gensheimer & Narasimhan 2019, *nnet-survival* (arXiv:1805.00917).
+- van den Oord et al., *CPC* (arXiv:1807.03748).
+- Pal et al., *Future Lens* (arXiv:2311.04897).
+- *Next-latent prediction* (arXiv:2511.05963).
+- *StreamGuard* (arXiv:2604.03962).
+- Qwen3Guard tech report (arXiv:2510.14276).
+- Datasets: LongWriter-6k, ToxicChat, BeaverTails, Aegis 2.0, XSTest (see datasets/README.md).
+- Tools: PyTorch 2.14, transformers 5.20, scikit-learn, all-MiniLM-L6-v2.
+
+## Appendix: reproducibility check
+
+We re-ran `EVENT=unsafe ONLY=direct_AO,A_horizon_query+mem+jepa SEEDS=0` (`/tmp/rerun`).
+- direct_AO reproduced exactly: AUROC 0.480 / 0.776 / 0.811 at H = 64 / 512 / 1024.
+- A reproduced within seed noise: 0.500 / 0.807 / 0.833 vs the original 0.465 / 0.789 / 0.829. The differences come from non-deterministic CUDA attention kernels and are smaller than the across-seed sd reported above.
+
+Environment: `results/env.json` (Python 3.12, torch 2.14.1+cu130, transformers 5.20.1, RTX A6000).
+
+
+════════════════════════════════════════════════════════════════════════════════
+                            RESEARCH PLAN
+════════════════════════════════════════════════════════════════════════════════
+
+# Planning: observer architectures for long-horizon forecasting (Qwen3-8B, frozen)
+
+## Motivation & Novelty Assessment
+
+### Why This Research Matters
+Runtime monitors that only flag harm once it has appeared react too late for long agentic or long-form generations. An observer that reads a frozen model's activations and forecasts *when* a response will turn unsafe, and *what* the rest of a long answer will do, would enable early intervention and give insight into how far ahead the model "plans".
+
+### Gap in Existing Work
+literature_review.md finds:
+- No prior work evaluates activation-based forecasting by lead distance beyond about 32 tokens. Probes, Future Lens, and next-latent prediction all stay at ≤32 tokens.
+- LatentQA and Activation Oracles read one activation and answer about properties of the completion, but they have no time axis, no trajectory memory, and no event-time output.
+- Safety forecasting work such as StreamGuard and "time to unsafe sampling" either works on text or does not model censoring.
+
+### Our Novel Contribution
+We run a matched comparison of new observer designs against a matched *direct activation readout* on the same labels, with horizons to 2048 tokens:
+- A, horizon-query bottleneck;
+- B, latent rollout;
+- C, a JEPA future-embedding auxiliary;
+- D, hierarchical coarse→fine;
+- E, streaming memory.
+
+All designs share a censoring-aware discrete-time hazard head. Results are reported separately for safety-onset and long-form content forecasting, with family-cluster bootstrap CIs.
+
+### Experiment Justification
+- Exp 1 (data + audit): on-policy Qwen3-8B continuations, LLM timeline annotation, fixed 64-token cutoffs. Every later claim depends on leak-free, family-split targets.
+- Exp 2 (baselines): prevalence (KM), position, text-only TF-IDF, linear probe, majority / copy-last content. These establish whether there is any activation signal beyond trivial cues.
+- Exp 3 (architectures vs direct AO, 3 seeds): the core hypothesis test.
+- Exp 4 (ablations: no memory, no JEPA, no hazard head; B without memory): attributes any gain to a component.
+- Exp 5 (controls: zero / shuffled activations at test time): checks that the observers actually read activations.
+
+## Research Question
+Does an observer with (a) trajectory memory, (b) multi-window future-latent prediction and (c) an explicit hazard distribution beat a matched direct activation readout? The forecast targets are (1) first unsafe onset within H ∈ {64,…,2048} tokens and (2) future-segment behavior/topic and a remaining-response summary. Does the gain grow with lead distance?
+
+## Hypothesis Decomposition
+- H1: the new architectures have higher AUROC and lower Brier than direct_AO, averaged over H.
+- H2: the gap grows with H.
+- H3: each of memory, the JEPA auxiliary, and the hazard head contributes. Removing one hurts at long H.
+- H4: content accuracy is above majority and copy-last baselines at distance ≥ 4 segments (≥256 tokens).
+
+## Design decisions (fixed before looking at continuations)
+- **Prompt sources (unmodified benchmark prompts, no adversarial wrappers).** ToxicChat (toxic real user prompts), BeaverTails (unsafe-category prompts), Aegis 2.0 (unsafe prompts), XSTest (safe/contrast prompts) and LongWriter-6k (long-form). 40 prompts per source, 216 prompts total.
+  - Families = source × category (or a LongWriter bucket). A 30% family-level test split was assigned *before generation*.
+  - *Deviation:* an earlier idea of wrapping harmful requests in long-form templates to construct late onsets was dropped. The study therefore measures naturally occurring events only, and these are expected to be rare and early.
+- **Generation.** Qwen3-8B, non-thinking mode, T=0.7, top-p 0.9, max 2048 new tokens.
+- **Events.**
+  - Primary: the first 64-token segment the annotator marks unsafe.
+  - Secondary, denser event ("caution"): the first segment with behavior refuse or warn. It is used because natural unsafe events may be too rare.
+- **Censoring.** Generations that stop (EOS or cap) without the event are right-censored, not safe. A secondary evaluation treats EOS-without-event as event-free.
+- **Cutoffs.** Every 64 tokens. The observer reads 16-token block-mean activations of layers 9/18/27/35 for blocks up to the cutoff only; this is asserted in code. Only still-safe prefixes are used for safety.
+- **Annotator.** gpt-5.6-luna, called directly through the OpenAI API because no OpenRouter key is available in this environment. One call per generation.
+
+## Baselines and metrics
+- Baselines are listed above. Direct_AO = an MLP on the latest activation with independent per-horizon sigmoids and per-window content heads. It has the same encoder, epochs and targets as the observers. It is a cheap stand-in for a trained AO/LatentQA verbalizer: a full LLM-decoder AO was infeasible in the 1-hour budget.
+- Safety metrics: AUROC, AUPRC, Brier and log loss per H; early-warning recall at a 5% trajectory false-alarm rate.
+- Content metrics: behavior and topic accuracy vs distance; remaining-summary retrieval (MRR, cosine).
+- Cost: parameters, training seconds, latency.
+- Statistics: family-cluster bootstrap 95% CIs; 3 seeds.
+
+## Timeline (60 min)
+- Generation and caching: about 20 min.
+- Annotation: about 3 min.
+- Training: about 10 min.
+- Analysis and docs: about 15 min.
+
+## Potential Challenges
+- Few unsafe events. Mitigation: the caution event, and honest reporting of power.
+- GPU memory contention.
+- Annotation noise.
+- Short responses: censoring leaves few known labels at long H.
+
+## Direction ranking (direction budget = 3)
+
+Scored on evidence, relevance, information gain and feasibility; see also literature_review.md §8.
+
+**Kept:**
+1. Long-horizon onset forecasting with censoring-aware hazard observers vs a matched direct readout (D1).
+2. Long-form content forecasting: future-segment behavior/topic and remaining-summary retrieval (D2).
+3. Component ablations: memory, JEPA future-latent loss, hazard head, latent rollout; plus zero/shuffle controls (D3).
+
+**Rejected:**
+- Training new full LLM-decoder AOs from scratch: compute and time.
+- Multi-turn WildChat: gated and off-policy.
+- RealToxicityPrompts: horizon too short.
+- Steering: out of scope.
+- Conformal bounds: optional.
+- Scale study: compute.
+- *Constructed* late-harm prompts that would elicit detailed harmful content: dropped during execution on safety grounds. Only naturally occurring events are used.
+
+
+════════════════════════════════════════════════════════════════════════════════
+                          LITERATURE REVIEW
+════════════════════════════════════════════════════════════════════════════════
+
+# Literature Review: Observer Architectures for Long-Horizon Forecasting of Unsafe and Long-Form LLM Behavior
+
+Detailed per-paper notes: `papers/notes/<arxiv_id>.md` (24 notes; LatentQA, Activation Oracles, StreamGuard, SCM/FineHarm, Emergent Response Planning, NextLat/HiLP were deep-read in full).
+
+## 1. Research area overview
+
+The hypothesis sits where four literatures meet:
+
+1. **Activation verbalizers.** Decoders that read an LLM's activations and answer questions in natural language: Patchscopes, SelfIE, LatentQA, Activation Oracles (AOs), Predictive Concept Decoders (PCDs), Meta-Models.
+   - All read a *fixed set of positions* (typically ≤50 tokens) from one or a few layers.
+   - All answer about the *present* or the *whole next reply*.
+   - None is trained or evaluated with an explicit time axis.
+2. **Lookahead and planning probes.** Hidden states encode the future: Future Lens, "Do LMs plan ahead", Emergent Response Planning, length prediction from hidden states (EGTP/PLP), "LLMs decide early and explain later", hallucination-risk probes.
+   - Predictability decays quickly with distance (Future Lens: 1–3 tokens).
+   - Probes on the prompt state still predict *global* response attributes (length, final answer), with Spearman ≈0.8.
+   - Accuracy is U-shaped over the course of the response.
+3. **Streaming safety monitors.** Monitors that act on partial generations: Constitutional Classifiers (streaming output classifier), Qwen3Guard-Stream, SCM/FineHarm, StreamGuard (forecasting by Monte Carlo rollouts).
+   - All operate at harm onsets within the first sentence or about 100 tokens.
+   - None reports performance as a function of *lead distance*.
+4. **Future-latent prediction and survival analysis.** Methods supplying the observer's components: CPC/InfoNCE, Multi-Token Prediction, Belief-State Transformer, NextLat, Hierarchical Latent Prediction (HiLP) for multi-scale future latents; Nnet-survival / Cox-Time / DeepHit for discrete-time hazards; conformal time-to-unsafe-sampling bounds.
+
+**Central gap:** across the 31 papers, no work forecasts *when* a behavior will occur, at leads of 100–2048 tokens, from activations. The longest activation-based lookahead found is about 32 decoding steps (PLP); next-latent methods reach about 20 tokens.
+
+## 2. Key papers
+
+### 2.1 Activation verbalizers (the baselines to beat)
+
+**LatentQA / LIT** (Pan, Chen, Steinhardt; 2412.08686, ICLR 2026). *This is the user-specified paper and repo.*
+- **Method:** decoder = LoRA copy of the target (r=32, α=64, lr 1e-4, batch 128).
+  - It reads residual activations at layer k=15 of Llama-3-8B-Instruct, about 50 positions.
+  - These replace the input embeddings of "???" placeholder tokens at decoder layer 0. A sweep found k=15, ℓ=0 best (eval ppl 1.013).
+- **Data:** 16,732 o1-generated (control, stimulus, completion, QA) items in 3 types: goals, personas, extractive QA. Control activations are masked so the decoder must infer the control from stimulus activations. The data ships in the repo.
+- **Framing:** the task is explicitly "predict qualitative properties of *future* completions from *current* prompt activations".
+- **Results:**
+  - Hidden-persona identification from user-turn activations: 100/92% (easy/hard), vs GPT-4 reading the full dialog at 97/73 and SelfIE at about 23/16.
+  - Relational extraction: +32 points over linear probes.
+  - CrowS-Pairs debiasing: the only method with a significant effect.
+  - Steering works on unseen personas.
+  - Gains scale with model and data size.
+- **Limitations:** no temporal output, a static read window, whole-completion labels, hallucination risk.
+- **We verified it runs:** `scripts/test_latentqa_reading.py`, log in `logs/latentqa_smoke_test.log`.
+
+**Activation Oracles** (Karvonen et al.; 2512.15674).
+- **Method:** LoRA (r=64) copy of the target. It reads activations at 25/50/75% depth, injected additively and norm-matched after layer 1 onto " ?" tokens: h' = h + ||h||·v/||v||.
+- **Training:** about 1M examples (LatentQA system-prompt QA, 7 binary classification tasks, self-supervised past/next-token "context prediction" on FineWeb and LMSYS).
+- **Models:** Qwen3-8B, Gemma-2-9B, Llama-3.3-70B, Claude Haiku 3.5. About 10 H100-hours for Qwen3-8B.
+- **Results and caveats:** strong out-of-distribution auditing (Taboo secret word 0.205 vs 0.04 for white-box baselines), but uncalibrated.
+- **Released checkpoints:** e.g. `adamkarvonen/checkpoints_latentqa_cls_past_lens_addition_Qwen3-8B` (cached locally) and Qwen3-1.7B/4B/14B/32B variants.
+
+**Building Better AOs** (2606.02609).
+- **Changes:** on-policy rollouts, a CoT-chunk conversational QA set (questions about the *future* part of a reasoning trace, asked from earlier activations), 5 adjacent layers (21–25), stronger injection.
+- **Result:** AObench score +0.244 → +0.435.
+- **Advice:**
+  - Score yes/no answers by AUROC on the logit margin, not accuracy.
+  - Use ≥20–50 read positions.
+  - Narrow fine-tuning of AOs only matched linear probes.
+  - A text-only baseline was competitive in early versions.
+- **Checkpoint:** `ceselder/qwen3-8b-ao-v3-best`.
+
+**AO calibration** (2605.26045).
+- When candidates can be enumerated, having the oracle score each candidate gives AUROC 0.92–0.96.
+- Self-reported confidence is useless (AUROC ≈0.5).
+- **Implication:** our verbalizer baseline should score a closed set of options, e.g. lead-distance bins, by likelihood. This turns it into a hazard-like distribution and makes the comparison fair.
+
+**Predictive Concept Decoders** (2512.15712).
+- **Method:** layer-15 activations → top-16 sparse concepts out of 32k → written to layer 0 of a LoRA decoder. Pretrained to predict the *next 16 tokens* from 16 activations, then fine-tuned on QA.
+- **Result:** detects upcoming harmful output from jailbreak-prompt activations about 31% of the time, vs 14% for LatentQA. This is evidence that *future-prediction pretraining helps verbalizers forecast*. No public checkpoint.
+
+**Patchscopes, SelfIE, Meta-Models** (2401.06102, 2403.10949, 2410.02472). Untrained or lightly trained patching decoders. These are weaker baselines; LatentQA beats Patchscope by about 38 points.
+
+### 2.2 Lookahead / planning from hidden states
+
+**Future Lens** (2311.04897, GPT-J-6B).
+- Linear maps to future tokens decay fast: precision@1 of 29.2 → 15.8% at +1 to +3 tokens.
+- A learned soft-prompt decoder holds about 44–48%.
+- **Lesson:** compare against a strong learned decoder, not just a linear probe.
+
+**Emergent Response Planning** (2502.06258).
+- An MLP probe on the prompt's last hidden state predicts response length (Spearman 0.80–0.85 on instruct models), number of reasoning steps, story character choices, multiple-choice answers, and confidence.
+- Probe accuracy is U-shaped across the response: lowest mid-response, where trajectory memory should help most.
+- Responses are capped at 1000 tokens. The datasets are HF-hosted (UltraChat, GSM8K, TinyStories, CommonsenseQA, ...).
+
+**EGTP / PLP output-length prediction** (2602.11812).
+- Pooling hidden states weighted by next-token entropy beats last-token or mean pooling (MAE 103 vs 120–155).
+- Progressive remaining-length prediction improves as decoding proceeds, but only up to 32 steps are reported.
+- Releases **ForeLen** (`abinzzz/ForeLen`), with responses of 0.6k–2.2k tokens on average and up to about 8k.
+- Time-to-EOS is a free event-time label.
+
+**Decide Early, Explain Later** (2604.22266).
+- In Qwen3-4B reasoning traces, the final answer is fixed while about 760–1900 tokens of reasoning remain.
+- A memoryless per-sentence linear probe saves about 500 tokens at under 2% accuracy loss.
+- Answers flip about 3 times per trace.
+- This is a natural long-lead event: when the answer locks in.
+
+**Do LMs plan ahead** (2404.00859) and **Belief State Transformer** (2410.23506).
+- Future information is largely a by-product ("breadcrumbs") in small models; deliberate pre-caching grows with scale.
+- Independent per-horizon heads need not form a belief state. A suffix encoder used only during training supplies gradient from the whole future, which motivates training-time future encoders.
+
+**Hallucination risk from internal states** (2407.03282). A query-only SwiGLU probe reaches 84%, but transfer across tasks is weak and responses are short.
+
+### 2.3 Streaming safety monitors (task framing, labels, metrics)
+
+**StreamGuard** (2604.03962).
+- Moderation as *forecasting*: a value head on every prefix predicts the expected harmfulness of future continuations.
+- Supervised with Monte Carlo rollouts: 16 samples at temperature 0.7, judged by Qwen3Guard. Positions are labeled densely for the first 64 tokens, then every 4th.
+- Results on QwenGuardTest `response_loc` (8B): OnTime 92.6% vs 89.9% for Qwen3Guard-Stream; output F1 81.9 vs 80.4.
+- Rollout-model choice matters a lot.
+- Onsets are in the first sentence 91% of the time. There is no lead-distance analysis.
+
+**Streaming Content Monitor (SCM) / FineHarm** (2506.09996).
+- 29K responses (about 14K harmful) with sentence-level and part-of-speech word-level harm labels, from WildGuardMix/WildJailbreak plus an uncensored Llama-3.1-8B.
+- Model: a token-level head plus a holistic head with a logic loss; detection triggers after k flagged tokens (Delay-k).
+- Average stop is at 18% of the response (about 100 tokens). Harmful responses average about 550–600 tokens.
+- The HF dataset `liyang-ict/FineHarm` is **gated**; our token lacks access.
+
+**Constitutional Classifiers** (2501.18837). The streaming output classifier blends per-token and cumulative-max predictions during training; metrics include leak rate and TPR at fixed FPR on benign traffic.
+
+**Shallow safety alignment** (2406.05946).
+- Alignment differences between aligned and base models are concentrated in the first ≈5 tokens.
+- Prefilling k harmful tokens raises attack success to about 50% by k≈10.
+- Their "safety recovery" data creates late refusals, which give non-monotone events.
+
+**Time-to-unsafe-sampling** (2506.13593). A survival framing with conformal lower predictive bounds; "time" counts resampling attempts, not tokens. Their calibration can be layered on our hazard head.
+
+**Forecasting rare behaviors** (2502.16797). Extrapolates elicitation probabilities across query volume. Not about token time, but its tail-forecasting mindset is relevant.
+
+**Qwen3Guard tech report** (2510.14276).
+- Qwen3Guard-Stream is a token-level safe/controversial/unsafe classifier sharing the Qwen3 tokenizer.
+- **Our best automatic event-time labeler:** the 0.6B and 4B models are cached locally.
+- The paper also releases `Qwen/Qwen3GuardTest`, which we downloaded.
+
+### 2.4 Components for the observer
+
+**CPC** (1807.03748). InfoNCE with a separate W_k per horizon:
+L_k = −E log[exp(z_{t+k}ᵀW_k c_t) / Σ_j exp(z_jᵀW_k c_t)].
+log N − L_k lower-bounds I(z_{t+k}; c_t), which can serve as a per-horizon diagnostic of how much future information remains.
+
+**Multi-Token Prediction** (2404.19737). Gains peak at n≈4 tokens. The authors suggest embedding-space targets for longer horizons.
+
+**NextLat** (2511.05963, code cloned).
+- Auxiliary SmoothL1 prediction of the next latent from (latent, next token), with stop-gradient targets.
+- Provably converges toward belief states.
+- Beats MTP out to 20 tokens; the authors name *hierarchical* belief states as future work.
+
+**HiLP** (2608.05806). Adds a higher-level, window-pooled abstract latent. Its advantage over NextLat grows with horizon (up to 8 steps). This is the closest precedent for our "multi-scale future window latents".
+
+**Discrete-time hazard: Nnet-survival** (1805.00917).
+- Per bin j with hazard h_j and survival S_j = ∏_{i≤j}(1−h_i).
+- Event observed in bin j: log L = ln h_j + Σ_{i<j} ln(1−h_i).
+- Censored in bin j: log L = Σ_{i<j} ln(1−h_i).
+
+**Cox-Time and DeepHit** (1907.00825; pycox cloned). Cox-Time is a sampled Cox loss; DeepHit adds a ranking term (best ranking, worst calibration).
+- Metrics: time-dependent concordance C^td, and the IPCW integrated Brier score / integrated binomial log-likelihood (pycox `EvalSurv`).
+
+## 3. Common methodologies
+
+- **Injection-style verbalizers.** Activations are placed at placeholder tokens: replaced at layer 0 (LatentQA, PCD) or added with norm-matching after layer 1 (AO). LoRA on a copy of the target; read layers in the middle or at 25/50/75% depth; ≤50 positions.
+- **Probes.** Linear or 1-hidden-layer MLP on a single position (the last prompt token) or on pooled positions (mean, max, entropy-weighted).
+- **Per-prefix heads for streaming.** A linear or value head on every token; labels from final-response labels (copied to every prefix), boundary labels (Qwen3Guard), heuristic word labels (FineHarm), or Monte Carlo rollouts (StreamGuard). Debounced triggers (Delay-k).
+- **Future-latent objectives.** InfoNCE (CPC), SmoothL1 to stop-gradient future latents (NextLat, HiLP), multi-token heads (MTP), and suffix encoders used only at training time (BST).
+- **Survival heads.** Discrete-time logistic hazard with censoring (Nnet-survival), Cox-Time, DeepHit.
+
+## 4. Standard baselines (for our comparison)
+
+1. **Direct activation verbalizer trained on the same labels.**
+   - (a) LatentQA-style LoRA decoder (`code/latentqa`). The official Llama-3-8B decoder exists; for Qwen3, use repo support for `Qwen/Qwen3-4B-Instruct-2507` or the AO checkpoints.
+   - (b) An Activation Oracle fine-tuned on our forecasting QA. Its yes/no answers or bin choices are scored by logit, following the AO-calibration finding.
+2. **Linear / MLP probe** on the current position (and last-k mean-pooled), with one head per horizon bin. This is the "memoryless direct" baseline.
+3. **Per-prefix value head** (StreamGuard/SCM style), trained on the same event labels.
+4. **Text-only baseline.** A small LM or classifier reading the generated text prefix. This checks whether activations add anything over text (the warning from Building Better AOs).
+5. **Ablations of the observer.** −memory (single position); −multi-scale latent loss; hazard head vs independent per-horizon binary heads.
+
+## 5. Evaluation metrics
+
+- **Lead-stratified discrimination.** For each anchor position t and lead bin [k₁,k₂) ∈ {[1,64), [64,128), [128,256), [256,512), [512,1024), [1024,2048)}: AUROC / AUPRC for "event occurs in (t+k₁, t+k₂]". The key plot is Δ(observer − verbalizer) vs lead, and the hypothesis predicts this gap grows.
+- **Survival metrics.** Time-dependent concordance C^td; IPCW integrated Brier score and integrated negative binomial log-likelihood (pycox `EvalSurv`); calibration (ECE of S(t) at fixed horizons). Report both IPCW and "fully-followed subset" numbers, because censoring by response end is informative.
+- **Streaming-monitor metrics.** OnTime / Late / Miss relative to the annotated onset (StreamGuard), tokens-before-onset at first trigger, false-positive rate on benign or XSTest responses, leak rate.
+- **Long-form content forecasting.**
+  - Cosine / retrieval accuracy (R@k among in-batch candidates) between predicted and actual future-window embeddings, using `sentence-transformers/all-MiniLM-L6-v2` (cached).
+  - Topic/section-label F1, or QA accuracy judged by an LLM, per lead bin.
+- **Length / EOS.** Spearman and MAE for remaining length (ForeLen).
+
+## 6. Datasets in the literature (and what we have)
+
+| Need | Dataset | Status |
+|---|---|---|
+| Token-level unsafe onset (short responses) | Qwen3GuardTest `response_loc` (813) | downloaded |
+| Unsafe onset inside reasoning traces | Qwen3GuardTest `thinking_loc` (569), `thinking` (1,059) | downloaded |
+| Harmful prompts for on-policy rollouts | HarmBench (CSV), StrongREJECT (CSV), AdvBench (`mlabonne/harmful_behaviors`), JBB-Behaviors, BeaverTails (330k), Aegis 2.0, LLM-LAT harmful, circuit-breakers (harmful completions avg ≈370 tokens) | downloaded |
+| Benign or over-refusal controls | XSTest, harmless_alpaca, Dolly-15k (LatentQA stimuli) | downloaded |
+| Long-form outputs | LongWriter-6k (outputs: median ≈4.7k tokens, p10 ≈2.8k), ForeLen Qwen2.5-7B LongSeq (1,057) | downloaded |
+| Moderation-labeled chat | ToxicChat, Aegis 2.0, BeaverTails | downloaded |
+| Token-level harm (FineHarm), shallow-vs-deep safety data, WildGuardMix, WildJailbreak, HEx-PHI | — | gated, not accessible with the current token |
+
+**Measured horizon statistics** (`datasets/horizon_stats.txt`, Qwen3 tokenizer):
+- `response_loc` onset: median 7 tokens into the response (max 106).
+- `thinking_loc` onset: median 47 tokens, p90 111, max 307, inside traces of median 1,085 tokens.
+- 0% of onsets are at ≥512 tokens.
+
+**Conclusion:** natural single-turn safety data cannot test leads of 512–2048 tokens. Long-lead evaluation needs constructed or long-trajectory data; see §8.
+
+## 7. Gaps and opportunities
+
+1. **No lead-distance analysis** for any activation-based monitor or verbalizer. This is the main contribution opportunity.
+2. **Verbalizers read a static window.** None keeps memory across a growing trajectory, although the U-shaped probe accuracy and the answer flips (≈3 per trace) suggest memory matters.
+3. **Future-latent objectives** (NextLat, HiLP, CPC) have only been used for pretraining LMs at horizons of ≤20 tokens, never as auxiliary objectives for an *external observer* at horizons of 256–2048 tokens.
+4. **No verbalizer outputs a calibrated event-time distribution.** Survival heads with censoring are standard in medicine but absent here.
+5. **Benchmarks.** No public benchmark gives harm onsets far into long responses.
+
+## 8. Research directions: enumeration, scoring and pruning (direction budget = 3)
+
+Each direction is scored 1–5 on evidence (E), relevance to the hypothesis (R), expected information gain (I) and feasibility on 1× A6000 48 GB with about 60 GB of free disk (F). Total out of 20.
+
+| # | Direction | E | R | I | F | Total | Decision |
+|---|---|---|---|---|---|---|---|
+| D1 | **Long-horizon unsafe event-time forecasting on constructed long trajectories.** Late-harm multi-part long-form prompts plus reasoning-trace → final-answer onsets; on-policy Qwen3-8B (or abliterated) rollouts; token onsets labeled by Qwen3Guard-Stream. Observer (memory + multi-scale future latents + hazard head) vs LatentQA/AO-style verbalizer and probe on the same labels; lead-stratified AUROC and C^td. | 4 | 5 | 5 | 4 | **18** | **KEEP (primary)** |
+| D2 | **Long-form content forecasting.** Predict what future windows (+128 … +2048 tokens) will cover, as future-window sentence embeddings and topic QA, on LongWriter-6k / ForeLen on-policy rollouts; observer vs verbalizer per lead bin. | 4 | 5 | 4 | 4 | **17** | **KEEP** |
+| D3 | **Component attribution and free-label sanity task.** Ablate memory, multi-scale latent loss and hazard head (vs per-horizon binary heads) on the D1/D2 data, plus time-to-EOS / answer-lock-in hazards (ForeLen, reasoning traces) as cheap labels that need no judge. | 4 | 4 | 4 | 5 | **17** | **KEEP** |
+| D4 | Train new full-size AO/LatentQA decoders from scratch with hazard verbalization (many GPU-hours) | 3 | 4 | 3 | 1 | 11 | reject: infeasible compute; use LoRA fine-tuning of existing checkpoints as the baseline only |
+| D5 | Multi-turn WildChat / LMSYS toxicity forecasting (turn-level) | 2 | 3 | 3 | 2 | 10 | reject: off-policy activations (the original model's states are unavailable), noisy turn-level labels, LMSYS gated |
+| D6 | RealToxicityPrompts continuation toxicity | 3 | 2 | 2 | 5 | 12 | reject: continuations ≈20 tokens, no long-horizon signal |
+| D7 | Steering or early intervention using observer forecasts | 2 | 2 | 3 | 3 | 10 | reject: out of scope (hypothesis is about forecasting); possible follow-up |
+| D8 | Conformal lower bounds on time-to-unsafe on top of the hazard head | 3 | 3 | 2 | 4 | 12 | reject as a separate direction; optional calibration add-on inside D1 |
+| D9 | Cross-model / scale study (4B → 8B → 32B) | 3 | 3 | 3 | 2 | 11 | reject: compute; only if D1 is cheap |
+
+Rejected directions are pruned and should not be reopened unless D1–D3 results invalidate the ranking (see STATE.md).
+
+## 9. Recommendations for the experiment
+
+**Target model.**
+- `Qwen/Qwen3-8B` (cached). It shares the tokenizer with Qwen3Guard-Stream (token-aligned onset labels, no re-tokenization), and an AO checkpoint for it is cached.
+- Use `Qwen/Qwen3-4B(-Instruct-2507)` if throughput is limiting; LatentQA's code already supports it.
+- `huihui-ai/Qwen3-8B-abliterated` (cached) can generate trajectories that actually turn unsafe. Read activations from the *same* model that generated the trajectory (on-policy).
+- Only GPU 2 of the 4 A6000s was free when checked. Plan for one GPU.
+
+**Long-lead data construction** (D1):
+- (a) **Late-harm multi-part prompts.** A LongWriter-style benign long task (e.g. a 1,500-word report on X) followed by a final harmful sub-request from HarmBench/StrongREJECT/AdvBench. Generate with the abliterated model and label per-token onset with Qwen3Guard-Stream-4B. Onsets land roughly 300–2000 tokens in.
+- (b) **Reasoning traces** (thinking mode) on harmful prompts. Event = first unsafe token of the *final answer* after `</think>`, or answer lock-in. Leads ≈500–1500 tokens.
+- (c) Benign long-form controls (LongWriter, Dolly) that never turn unsafe. These give censored trajectories and calibrate the false-positive rate.
+
+**Labels.**
+- Per anchor position t: event time T−t (bins up to 2048), with right-censoring at end-of-response or at the 2048 horizon.
+- For verbalizer parity, phrase the same labels as QA: "Will the response become unsafe within the next N tokens?" and "In which window?". Score answers by logit over a closed set.
+
+**Observer architecture** (to implement; no code exists):
+- (a) A small causal transformer or GRU over a sequence of compressed activations (e.g. every 8–16 tokens, 1–3 mid/late layers, projected to 256–512 dimensions), which acts as the memory.
+- (b) Auxiliary heads that predict pooled future-window latents at scales {64, 256, 1024, 2048} with InfoNCE or SmoothL1 against stop-gradient targets (CPC, NextLat/HiLP). The targets are mean-pooled target-model activations or MiniLM embeddings of the future text window.
+- (c) A discrete-time logistic hazard head with censoring (Nnet-survival loss).
+
+**Baselines** (same labels, same activations): §4 items 1–4. The key comparison is *observer vs direct verbalizer*, stratified by lead bin.
+
+**Metrics:** §5. Primary: AUROC per lead bin and C^td. Secondary: integrated Brier score, OnTime/Late/Miss, R@k for content.
+
+**Practical cautions.**
+- **Storage.** Full activations are 4096-d bf16, i.e. 8 KB per token per layer. Store subsampled positions (stride 8–16) and/or PCA to 512 dimensions; about 60 GB of disk is free.
+- **Leakage.** Split by *prompt* (and by harmful behavior ID); never split anchors from the same trajectory across train and test.
+- **Censoring.** Censoring is informative (long responses are different), so also report on trajectories followed for the full horizon.
+- **Text-only control.** Include a text-only baseline to show that activations add information.
+
+
+════════════════════════════════════════════════════════════════════════════════
+                          PAPER REQUIREMENTS
+════════════════════════════════════════════════════════════════════════════════
+
+Generate a complete academic paper with the following structure:
+
+1. TITLE
+   - Clear, specific, informative
+   - Should convey main finding or contribution
+
+2. AUTHOR
+   - Use this exact author line in the \author{} block: Xiaoyan Bai and NeuriCo
+
+3. ABSTRACT (150-250 words)
+   - Problem statement
+   - Approach
+   - Key results
+   - Significance
+
+4. INTRODUCTION
+   - Research problem and motivation
+   - Gap in existing work
+   - Our contribution (be specific)
+   - Paper organization
+
+5. RELATED WORK
+   - Organized by theme/approach
+   - Position our work relative to prior work
+   - Cite papers from literature review
+
+6. METHODOLOGY
+   - Clear description of approach
+   - Experimental setup
+   - Datasets used
+   - Evaluation metrics
+   - Baselines
+
+7. RESULTS
+   - Present results with tables and figures
+   - Statistical analysis
+   - Comparison to baselines
+   - Ablation studies (if applicable)
+
+8. DISCUSSION
+   - Interpretation of results
+   - Limitations
+   - Broader implications
+
+9. CONCLUSION
+   - Summary of contributions
+   - Key findings
+   - Future work
+
+10. REFERENCES
+   - BibTeX format
+   - All cited papers
+
+════════════════════════════════════════════════════════════════════════════════
+                          OUTPUT FORMAT
+════════════════════════════════════════════════════════════════════════════════
+
+Create a MODULAR LaTeX project with the following directory structure:
+
+paper_draft/
+├── main.tex              # Main file that imports all sections
+├── references.bib        # BibTeX references
+├── sections/
+│   ├── abstract.tex      # Abstract content
+│   ├── introduction.tex  # Introduction section
+│   ├── related_work.tex  # Related work section
+│   ├── methodology.tex   # Methodology section
+│   ├── results.tex       # Results section
+│   ├── discussion.tex    # Discussion section
+│   └── conclusion.tex    # Conclusion section
+├── figures/              # Directory for any generated figures
+├── tables/               # Directory for complex standalone tables
+└── appendix/             # Directory for appendix sections (if needed)
+
+INSTRUCTIONS:
+1. First, create the directory structure above (mkdir -p paper_draft/sections paper_draft/figures paper_draft/tables paper_draft/appendix)
+2. Write main.tex using the EXACT preamble for NEURIPS:
+
+   \documentclass{article}
+   \usepackage[final]{neurips_2025}  % NEURIPS style (neurips_2025.sty is in paper_draft/)
+   \usepackage[hidelinks]{hyperref}  % REQUIRED: clickable links
+   \usepackage{booktabs}  % REQUIRED: professional tables
+   \usepackage{graphicx}
+   \usepackage{amsmath,amssymb}
+
+   % Import command files
+   \input{commands/math}
+   \input{commands/general}
+   \input{commands/macros}
+
+   % Use this bibliography style:
+   \bibliographystyle{plainnat}
+
+   \author{Xiaoyan Bai and NeuriCo}
+
+   - Use \input{sections/...} to include each section
+   - Use \bibliography{references} for references
+3. Write each section file with COMPLETE content (no placeholders)
+4. Each section file should include its \section{} command
+5. Write references.bib with all citations in BibTeX format
+6. After writing all files, compile the paper:
+   cd paper_draft && pdflatex -interaction=nonstopmode main.tex && bibtex main && pdflatex -interaction=nonstopmode main.tex && pdflatex -interaction=nonstopmode main.tex
+
+This modular structure allows humans to easily:
+- Edit individual sections without navigating a large file
+- Track changes per section
+- Reuse sections across different paper versions
+
+════════════════════════════════════════════════════════════════════════════════
+                          QUALITY REQUIREMENTS
+════════════════════════════════════════════════════════════════════════════════
+
+- Academic tone throughout
+- All claims must be supported by data from the experiment report
+- Proper citations using \cite{} commands
+- Clear figures and tables with proper captions
+- NO placeholder text - every section must have real content
+- The paper MUST compile without errors
+- If compilation fails, debug and fix the LaTeX errors
+
+════════════════════════════════════════════════════════════════════════════════
+                          LAB WRITING STYLE
+════════════════════════════════════════════════════════════════════════════════
+
+Follow these lab-specific conventions to match our paper style:
+
+1. LANGUAGE STYLE:
+   - Use active voice: "We propose", "We examine", "We focus on"
+   - Be direct and confident: "Our main question is...", "We hypothesize that..."
+   - State things clearly and simply - prefer plain language over jargon
+   - Use bold questions as paragraph organizers: {\bf what is X?}
+   - Include specific quantitative claims: "8.97% over baseline"
+   - Avoid fancy wording: "utilize" → "use", "facilitate" → "help"
+
+2. INTRODUCTION STRUCTURE:
+   - Engaging hook (get to the point quickly)
+   - Problem importance
+   - Gap identification
+   - Your approach with method figure reference
+   - Quantitative preview of results
+   - Contribution bullets (3-4 items, action verbs)
+
+3. CONTRIBUTION LISTS:
+   \begin{itemize}[leftmargin=*,itemsep=0pt,topsep=0pt]
+       \item We propose...
+       \item We conduct...
+       \item We complement...
+   \end{itemize}
+
+4. MODULAR COMMANDS STRUCTURE:
+   Command templates are pre-copied to paper_draft/commands/:
+   - math.tex: Math notation macros
+   - general.tex: Formatting macros
+   - macros.tex: Project-specific term definitions (customize this for your paper)
+
+   In main.tex, include:
+   \input{commands/math}
+   \input{commands/general}
+   \input{commands/macros}
+
+5. REFERENCE CONVENTIONS:
+   Use reference macros from math.tex:
+   - \figref{fig:name} for "figure 1" (lowercase, in-sentence)
+   - \Figref{fig:name} for "Figure 1" (capitalized, start of sentence)
+   - \secref{sec:name} for "section 2"
+
+6. TEXT FORMATTING:
+   - Use \para{Header text} for bold paragraph headers
+   - Define method/dataset names with \textsc and \xspace:
+     \newcommand{\methodname}{\textsc{MethodName}\xspace}
+
+7. TABLE FORMATTING:
+   - Use booktabs package (no vertical lines)
+   - Use \resizebox{\textwidth}{!}{...} for wide tables
+   - Use @{} to remove padding at table edges
+   - Use \cmidrule(lr){x-y} for sub-headers
+   - Use \textsc{} for dataset/method names in headers
+   - Bold best results with {\bf ...}
+
+8. FIGURE FORMATTING:
+   - Use 0.32\textwidth for 3-column subfigures
+   - Use 0.95\linewidth for full-width figures
+   - Use \input{figures/legend} for shared legends
+   - Write self-contained captions explaining key observations
+
+9. RESULTS PRESENTATION:
+   - Define \increase and \decrease for colored arrows (green up, red down)
+   - Bold best results in tables
+   - Report confidence intervals when available
+
+10. ALGORITHM STYLING:
+    - Use algpseudocode with [noend]
+    - Use \triangleright for comments
+
+11. HYPERLINKS (REQUIRED):
+    - Always use \usepackage[hidelinks]{hyperref} or with colored links
+    - All citations, section refs, figure refs, table refs must be clickable
+    - This is essential for reader navigation
+
+════════════════════════════════════════════════════════════════════════════════
+                          WORKFLOW: REVIEW AND REFLECT
+════════════════════════════════════════════════════════════════════════════════
+
+Before calling finish, you MUST complete these review steps:
+
+1. REVIEW RESOURCES (at the start):
+   - Read .claude/skills/paper-writer/SKILL.md for detailed guidance
+   - Study templates/paper_writing/lab_style_guide.md for style conventions
+   - Browse paper_examples/ for formatting and language patterns
+
+2. SELF-REFLECTION (before finishing):
+   After writing all sections, review your work against these criteria:
+
+   LANGUAGE CHECK:
+   - [ ] Is the writing clear and jargon-free?
+   - [ ] Are claims specific with quantitative support?
+   - [ ] Is active voice used throughout?
+
+   FORMATTING CHECK:
+   - [ ] Does main.tex include \input{commands/math}, \input{commands/general}, \input{commands/macros}?
+   - [ ] Is hyperref package included for clickable references?
+   - [ ] Do tables use booktabs (no vertical lines)?
+   - [ ] Are best results bolded in tables?
+   - [ ] Are figures/tables properly captioned?
+
+   STRUCTURE CHECK:
+   - [ ] Does introduction follow: hook → importance → gap → approach → preview → contributions?
+   - [ ] Are contribution bullets specific with action verbs?
+   - [ ] Does the paper compile without errors?
+
+3. FIX ISSUES:
+   - Address any issues found in the self-reflection
+   - Re-compile and verify the PDF looks correct
+
+Only after completing this review should you consider the paper finished.

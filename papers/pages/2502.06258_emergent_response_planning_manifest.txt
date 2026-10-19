@@ -1,0 +1,10 @@
+PDF: papers/2502.06258_emergent_response_planning.pdf
+Total pages: 20
+Pages per chunk: 4
+
+Chunks:
+  2502.06258_emergent_response_planning_chunk_001.pdf: pages 1-4
+  2502.06258_emergent_response_planning_chunk_002.pdf: pages 5-8
+  2502.06258_emergent_response_planning_chunk_003.pdf: pages 9-12
+  2502.06258_emergent_response_planning_chunk_004.pdf: pages 13-16
+  2502.06258_emergent_response_planning_chunk_005.pdf: pages 17-20

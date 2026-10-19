@@ -1,0 +1,34 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\para{What the evidence supports.}
+We tested four hypotheses.
+(H1) The memory-based observers beat \directao only on the caution event, by $+0.03$ to $+0.11$ AUROC, with CIs that touch zero; the unsafe event cannot discriminate between methods.
+(H2) The gain does not grow with lead distance; it peaks at $H=256$--$512$.
+(H3) Among components, memory helps at long horizons ($-0.09$ to $-0.11$ AUROC at $H \ge 512$ when removed from \roll), while the JEPA loss, the hazard head and latent rollout bring no measurable gain.
+(H4) Content forecasting beyond trivial baselines is supported: behavior is forecast at 0.87--0.88 accuracy 512--1024 tokens ahead, and summary retrieval reaches about 5$\times$ chance MRR.
+
+\para{Much of what is forecastable is prompt-level.}
+Strong simple baselines are a recurring theme.
+A linear probe on the latest activation is competitive on the caution event, and text-only TF-IDF is the best unsafe-event predictor.
+Much of the behavior signal is response genre (\eg narrate vs.\ explain), which persists through a response.
+These observations suggest that, at this scale, the forecastable content is mostly a prompt-level or genre property, readable from the prompt-end activation or prompt text, rather than a long-range dynamic plan.
+This is consistent with prior findings that prompt states encode global response properties~\citep{dong2025emergent} and that text-only baselines can rival activation readers~\citep{bauer2026building}.
+
+\para{Why the hazard head did not help.}
+In principle a hazard head gives monotone, coherent risk across horizons.
+In practice, with 86\% of responses censored by \eos, late bins receive almost no supervision, and the product in \eqref{eq:hazard} extrapolates poorly; its Brier score at $H=2048$ is ten times that of independent classifiers.
+A parametric tail, or a mixture of direct per-$H$ heads with a monotonicity constraint, may keep the coherence without the extrapolation error.
+
+\para{Limitations.}
+\emph{Scale.} This is a pilot with 84 trajectories, 26 test trajectories in 12 test families, 5 unsafe and 7 late caution events; most CIs span $\pm$0.05--0.2.
+\emph{Natural events are early.} No unsafe onset occurs after 448 tokens, so the 1024--2048 horizons are untestable for that event, and long-$H$ labels come from a biased subset of long \longwriter outputs.
+\emph{Caution is partly a refusal signal.} Most caution onsets are at token 0; those trajectories contribute only cutoff 0, and late onsets drive the long-$H$ results.
+\emph{Labels.} A single LLM annotator gives single-pass labels at 64-token resolution, with no inter-annotator check and no cross-validation against a guard model.
+\emph{Baselines.} We did not run an off-the-shelf Activation Oracle or LatentQA decoder; \directao is a matched MLP readout, and our ``decoders'' are classification and retrieval heads rather than free-text generators.
+\emph{Other.} We used one rollout per prompt, so we cannot measure calibration against the model's true outcome distribution; hyperparameters were not tuned; and $p$-values are not corrected for multiple comparisons, which would only strengthen the null conclusions.
+
+\para{Safety considerations and broader impact.}
+An early design that wrapped harmful requests in long-form templates to construct late unsafe onsets was abandoned, because it would have elicited detailed harmful content.
+We use only naturally occurring events from unmodified benchmark prompts, and we release no harmful generations.
+Better forecasting monitors could help stop harmful generations early; the same monitors could in principle be used to probe for prompts that delay detection, which is one reason we report their failure modes in detail.

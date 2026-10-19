@@ -1,0 +1,44 @@
+{
+ "train": {
+  "rows": 30007,
+  "columns": [
+   "id",
+   "reconstruction_id_if_redacted",
+   "prompt",
+   "response",
+   "prompt_label",
+   "response_label",
+   "violated_categories",
+   "prompt_label_source",
+   "response_label_source"
+  ]
+ },
+ "validation": {
+  "rows": 1445,
+  "columns": [
+   "id",
+   "reconstruction_id_if_redacted",
+   "prompt",
+   "response",
+   "prompt_label",
+   "response_label",
+   "violated_categories",
+   "prompt_label_source",
+   "response_label_source"
+  ]
+ },
+ "test": {
+  "rows": 1964,
+  "columns": [
+   "id",
+   "reconstruction_id_if_redacted",
+   "prompt",
+   "response",
+   "prompt_label",
+   "response_label",
+   "violated_categories",
+   "prompt_label_source",
+   "response_label_source"
+  ]
+ }
+}

@@ -1,0 +1,14 @@
+{
+ "train": {
+  "rows": 25058,
+  "columns": [
+   "text"
+  ]
+ },
+ "test": {
+  "rows": 6265,
+  "columns": [
+   "text"
+  ]
+ }
+}

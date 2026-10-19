@@ -1,0 +1,10 @@
+{
+ "train": {
+  "rows": 4948,
+  "columns": [
+   "prompt",
+   "rejected",
+   "chosen"
+  ]
+ }
+}

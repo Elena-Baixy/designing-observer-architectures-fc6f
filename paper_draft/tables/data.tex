@@ -1,0 +1,17 @@
+\begin{table}[t]
+\centering
+\small
+\caption{Trajectories per prompt source. Event columns give the number of trajectories with the event (in parentheses: with onset $\ge$64 tokens, which can contribute positives at $H>64$). Unsafe onsets occur at 0, 64, 128, 256 and 448 tokens only.}
+\label{tab:data}
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+\textbf{Source} & \textbf{$n$} & \textbf{Test} & \textbf{Median len.} & \textbf{Ended \eos} & \textbf{Unsafe} & \textbf{Caution} \\
+\midrule
+\longwriter & 32 & 9 & 1559 & 21 & 2 (2) & 3 (3) \\
+\toxicchat & 16 & 7 & 116 & 16 & 0 & 8 (0) \\
+\beavertails & 16 & 4 & 127 & 16 & 2 (1) & 12 (0) \\
+\aegis & 16 & 6 & 125 & 16 & 1 (1) & 12 (2) \\
+\xstest & 16 & 2 & 242 & 16 & 0 & 7 (2) \\
+\bottomrule
+\end{tabular}
+\end{table}

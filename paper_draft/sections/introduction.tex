@@ -1,0 +1,62 @@
+\section{Introduction}
+\label{sec:intro}
+
+A monitor that flags harmful text only after it appears cannot stop it.
+This matters more as language models write long reports, run multi-step agents and produce thousands of tokens per response.
+A useful monitor would read the model while it generates and say, early, \emph{when} the response is likely to turn unsafe and \emph{what} the rest of the response will do.
+
+Activations are a natural input for such a monitor.
+Probes recover global properties of an upcoming response, such as its length, from the last prompt state~\citep{dong2025emergent}.
+Activation verbalizers such as LatentQA~\citep{pan2024latentqa} and Activation Oracles~\citep{karvonen2025activation} read a fixed window of activations and answer free-form questions about the model, including properties of its future completion.
+Streaming safety monitors~\citep{li2025scm,stream2026guard,qwen2025guard} act on partial generations.
+
+{\bf What is missing?}
+Every one of these readers answers about the present or about the whole next reply, without a time axis.
+The longest activation-based lookahead we found in the literature is about 32 tokens~\citep{egtp2026}, and next-token-lens methods decay within a few tokens~\citep{pal2023futurelens}.
+None keeps a memory of the growing activation trajectory, and none outputs a distribution over \emph{when} an event occurs.
+Streaming safety monitors evaluate onsets that mostly occur within the first sentence and do not report performance by lead distance.
+
+{\bf Our approach.}
+We hypothesize that an observer with three properties forecasts further ahead than a direct readout trained on the same labels: (a) a streaming memory over the activation trajectory, (b) predicted latents for future windows, trained with a JEPA-style future-activation loss, and (c) an explicit discrete-time hazard head that handles right-censoring.
+We build three observers with these properties (\figref{fig:method}): a horizon-query bottleneck (\hq), a latent rollout (\roll) and a hierarchical coarse-to-fine model (\hier).
+We compare them against \directao, a matched readout of the latest activation with the same encoder, inputs, targets, parameter budget ($\approx$6M) and epochs, on a frozen \qwen.
+We evaluate two tasks: forecasting the first unsafe (or caution) segment within $H \in \{64,\dots,2048\}$ tokens, and forecasting the behavior, topic and summary of future segments of long responses.
+
+{\bf What do we find?}
+The answer is weak and mixed.
+Natural unsafe onsets on unmodified benchmark prompts are rare and early (5 of 84 trajectories, all $\le$448 tokens), so the primary safety event is unpowered and a text-only baseline wins on it.
+On the denser caution event, \hier improves AUROC over \directao by $+0.04$ to $+0.11$ at every $H \le 1024$ (0.976--0.990 vs.\ 0.871--0.953), but confidence intervals touch zero, the gain peaks at $H=256$--$512$ rather than growing with $H$, and a linear probe is nearly as good.
+Removing memory is the ablation that hurts most at long horizons; the future-activation loss, the hazard head and latent rollout bring no gain.
+On long-form content, observers forecast future-segment behavior at 0.83--0.88 accuracy up to 1024 tokens ahead (majority 0.62) and retrieve the remaining-response summary at 4--5$\times$ chance MRR.
+
+Our contributions are:
+\begin{itemize}[leftmargin=*,itemsep=0pt,topsep=0pt]
+    \item We formulate long-horizon activation forecasting as censored event-time prediction over lead distances up to 2048 tokens, with leak-checked inputs and a prompt-family split fixed before generation.
+    \item We design three observer architectures that combine streaming memory, future-window queries, a future-activation auxiliary loss and a logistic hazard head, and compare them against a matched direct readout and five non-neural baselines.
+    \item We run component ablations and zero/shuffled-activation controls, and show that memory is the one component with a consistent long-horizon benefit while the hazard head hurts long-horizon calibration under heavy censoring.
+    \item We report the limits of natural data honestly: unmodified prompts give too few late unsafe onsets, and pooled AUROC largely measures prompt-type separation rather than timing.
+\end{itemize}
+
+\Secref{sec:related} reviews related work, \secref{sec:method} describes the task and observers, \secref{sec:results} reports results, and \secref{sec:discussion} discusses limitations.
+
+\begin{figure}[t]
+\centering
+\resizebox{0.95\linewidth}{!}{%
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners, align=center, minimum height=0.9cm, font=\small},
+  arr/.style={-{Stealth}, thick}]
+\node[box, fill=gray!10] (llm) {Frozen \qwen\\ layers 9/18/27/35};
+\node[box, right=0.6cm of llm] (blk) {16-token block means\\ up to cutoff $t$};
+\node[box, right=0.6cm of blk, fill=blue!8] (mem) {Streaming memory\\ causal transformer\\ (last 64 blocks)};
+\node[box, right=0.6cm of mem, fill=blue!8] (q) {Future-window\\ forecasts $\vf_1,\dots,\vf_{32}$\\ (query / rollout / hier.)};
+\node[box, above right=0.1cm and 0.6cm of q, fill=green!8] (haz) {Hazard head\\ $F(H)=1-\prod_{k<H/64}(1-h_k)$};
+\node[box, right=0.6cm of q, fill=green!8] (cont) {Content heads\\ behavior, topic, summary};
+\node[box, below right=0.1cm and 0.6cm of q, fill=orange!10] (jepa) {JEPA auxiliary\\ (training only)};
+\draw[arr] (llm) -- (blk); \draw[arr] (blk) -- (mem); \draw[arr] (mem) -- (q);
+\draw[arr] (q.east) -- (haz.west); \draw[arr] (q) -- (cont); \draw[arr] (q.east) -- (jepa.west);
+\node[box, below=0.5cm of blk, fill=gray!5, font=\footnotesize] (dir) {\directao: latest block only $\to$ MLP $\to$ per-$H$ sigmoids};
+\draw[arr, dashed] (blk) -- (dir);
+\end{tikzpicture}}
+\caption{Observer pipeline. A frozen \qwen generates a response; activations from four layers are averaged over 16-token blocks. The observer reads only blocks up to the cutoff $t$, keeps a streaming memory, forms one forecast vector per future 64-token window, and outputs a censoring-aware hazard over 32 windows plus content predictions. A JEPA-style loss aligns forecasts with the target model's own future-window activations during training. The matched baseline \directao reads only the latest block.}
+\label{fig:method}
+\end{figure}
